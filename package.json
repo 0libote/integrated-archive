@@ -1,6 +1,6 @@
 {
   "name": "integrated-archive",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Archive notes instead of deleting them, with optional archive metadata.",
   "private": true,
   "license": "MIT",

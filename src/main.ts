@@ -109,10 +109,10 @@ export default class IntegratedArchivePlugin extends Plugin {
     }));
 
     const manager = this.app.fileManager;
-    const originalPrompt = manager.promptForDeletion;
+    const originalPrompt = manager.promptForDeletion.bind(manager);
     const prompt = async (file: TAbstractFile): Promise<boolean> => {
       if (!(file instanceof TFile) || this.isArchived(file) || this.settings.deleteAction === "delete") {
-        return originalPrompt.call(manager, file);
+        return originalPrompt(file);
       }
       if (this.settings.deleteAction === "archive") return this.archive(file);
       const choice = await new ArchiveDeleteModal(this.app).choose(file);
@@ -189,11 +189,11 @@ export default class IntegratedArchivePlugin extends Plugin {
     const s = this.settings;
     if (!s.addTag && !s.addArchivedDate && !s.addCreatedDate && !s.addModifiedDate) return;
 
-    await this.app.fileManager.processFrontMatter(file, (frontmatter) => {
+    await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
       if (s.addTag && s.tag.trim()) {
         const tag = s.tag.trim().replace(/^#/, "");
         const tags = Array.isArray(frontmatter.tags)
-          ? frontmatter.tags.map(String)
+          ? frontmatter.tags.map((value: unknown) => String(value))
           : typeof frontmatter.tags === "string"
             ? frontmatter.tags.split(/[ ,]+/).filter(Boolean)
             : [];
