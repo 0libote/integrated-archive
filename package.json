@@ -1,0 +1,21 @@
+{
+  "name": "integrated-archive",
+  "version": "0.1.0",
+  "description": "Archive notes instead of deleting them, with optional archive metadata.",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:0libote/integrated-archive",
+  "packageManager": "bun@1.3.14",
+  "type": "module",
+  "scripts": {
+    "dev": "bun esbuild.config.mjs",
+    "build": "tsc --noEmit && bun esbuild.config.mjs production",
+    "test": "bun test",
+    "check": "bun run build && bun test"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.1",
+    "obsidian": "1.13.1",
+    "typescript": "^5.8.3"
+  }
+}
