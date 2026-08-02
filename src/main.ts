@@ -5,12 +5,15 @@ import {
   Plugin,
   PluginSettingTab,
   Setting,
+  SettingDefinitionItem,
   TAbstractFile,
   TFile,
   moment,
   normalizePath,
 } from "obsidian";
 import { addCollisionSuffix, DeleteAction, isPathInFolder, resolveDeleteAction } from "./path";
+
+const createMoment = moment as unknown as (timestamp: number) => { format(pattern: string): string };
 
 interface ArchiveSettings {
   archiveFolder: string;
@@ -55,7 +58,7 @@ class ArchiveDeleteModal extends Modal {
     this.contentEl.createEl("p", { text: "Delete follows your Obsidian trash setting and may be permanent." });
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish("cancel")))
-      .addButton((button) => button.setButtonText("Delete").setWarning().onClick(() => this.finish("delete")))
+      .addButton((button) => button.setButtonText("Delete").setDestructive().onClick(() => this.finish("delete")))
       .addButton((button) => button.setButtonText("Archive").setCta().onClick(() => this.finish("archive")));
     return new Promise((resolve) => {
       this.resolve = resolve;
@@ -127,10 +130,6 @@ export default class IntegratedArchivePlugin extends Plugin {
     });
   }
 
-  async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
-  }
-
   async archive(file: TFile): Promise<boolean> {
     try {
       const archiveFolder = normalizePath(this.settings.archiveFolder.trim());
@@ -199,7 +198,7 @@ export default class IntegratedArchivePlugin extends Plugin {
             : [];
         frontmatter.tags = [...new Set([...tags, tag])];
       }
-      const format = (timestamp: number) => moment(timestamp).format(s.dateFormat || DEFAULT_SETTINGS.dateFormat);
+      const format = (timestamp: number) => createMoment(timestamp).format(s.dateFormat || DEFAULT_SETTINGS.dateFormat);
       if (s.addArchivedDate && s.archivedProperty.trim()) frontmatter[s.archivedProperty.trim()] = format(Date.now());
       if (s.addCreatedDate && s.createdProperty.trim()) frontmatter[s.createdProperty.trim()] = format(created);
       if (s.addModifiedDate && s.modifiedProperty.trim()) frontmatter[s.modifiedProperty.trim()] = format(modified);
@@ -212,64 +211,48 @@ class ArchiveSettingTab extends PluginSettingTab {
     super(app, plugin);
   }
 
-  display(): void {
-    const { containerEl } = this;
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    await super.setControlValue(key, value);
+    this.refreshDomState();
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem<keyof ArchiveSettings>[] {
     const s = this.plugin.settings;
-    containerEl.empty();
-
-    new Setting(containerEl).setName("Archiving").setHeading();
-    new Setting(containerEl).setName("Archive folder").setDesc("Path relative to the vault root.")
-      .addText((text) => text.setPlaceholder("Archive").setValue(s.archiveFolder).onChange(async (value) => {
-        s.archiveFolder = value;
-        await this.plugin.saveSettings();
-      }));
-    this.toggle(containerEl, "Preserve folder structure", "Keep each file’s original folders inside the archive.", "preserveFolders");
-    new Setting(containerEl)
-      .setName("When deleting")
-      .setDesc("Choose what happens to files outside the archive. Archived files always use Obsidian’s normal delete flow.")
-      .addDropdown((dropdown) => dropdown
-        .addOption("ask", "Ask every time")
-        .addOption("archive", "Archive automatically")
-        .addOption("delete", "Delete normally")
-        .setValue(s.deleteAction)
-        .onChange(async (value) => {
-          s.deleteAction = value as DeleteAction;
-          await this.plugin.saveSettings();
-        }));
-    this.toggle(containerEl, "Show archive in file menus", "Add Archive directly below Delete in file context menus.", "showArchiveMenu");
-
-    new Setting(containerEl).setName("Metadata").setHeading();
-    this.toggle(containerEl, "Add archive tag", "Add a tag to archived Markdown notes.", "addTag", true);
-    if (s.addTag) this.text(containerEl, "Archive tag", "Tag without the # prefix.", "tag");
-
-    this.toggle(containerEl, "Add archived date", "Record the day the note was archived.", "addArchivedDate", true);
-    if (s.addArchivedDate) this.text(containerEl, "Archived date property", "Frontmatter property name.", "archivedProperty");
-    this.toggle(containerEl, "Add created date", "Record the file system creation day.", "addCreatedDate", true);
-    if (s.addCreatedDate) this.text(containerEl, "Created date property", "Frontmatter property name.", "createdProperty");
-    this.toggle(containerEl, "Add last edited date", "Record the modification day from before archiving.", "addModifiedDate", true);
-    if (s.addModifiedDate) this.text(containerEl, "Last edited property", "Frontmatter property name.", "modifiedProperty");
-    if (s.addArchivedDate || s.addCreatedDate || s.addModifiedDate) {
-      this.text(containerEl, "Date format", "Moment format, for example YYYY-MM-DD or DD/MM/YYYY.", "dateFormat");
-    }
-  }
-
-  private toggle(container: HTMLElement, name: string, description: string, key: keyof Pick<ArchiveSettings,
-    "preserveFolders" | "showArchiveMenu" | "addTag" | "addArchivedDate" | "addCreatedDate" | "addModifiedDate">,
-  redisplay = false): void {
-    new Setting(container).setName(name).setDesc(description).addToggle((toggle) =>
-      toggle.setValue(this.plugin.settings[key]).onChange(async (value) => {
-        this.plugin.settings[key] = value;
-        await this.plugin.saveSettings();
-        if (redisplay) this.display();
-      }));
-  }
-
-  private text(container: HTMLElement, name: string, description: string, key: keyof Pick<ArchiveSettings,
-    "tag" | "archivedProperty" | "createdProperty" | "modifiedProperty" | "dateFormat">): void {
-    new Setting(container).setName(name).setDesc(description).addText((text) =>
-      text.setValue(this.plugin.settings[key]).onChange(async (value) => {
-        this.plugin.settings[key] = value;
-        await this.plugin.saveSettings();
-      }));
+    return [
+      {
+        type: "group",
+        heading: "Archiving",
+        items: [
+          { name: "Archive folder", desc: "Path relative to the vault root.", control: { type: "text", key: "archiveFolder", placeholder: "Archive" } },
+          { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
+          {
+            name: "When deleting",
+            desc: "Choose what happens to files outside the archive. Archived files always use Obsidian’s normal delete flow.",
+            control: { type: "dropdown", key: "deleteAction", options: { ask: "Ask every time", archive: "Archive automatically", delete: "Delete normally" } },
+          },
+          { name: "Show archive in file menus", desc: "Add Archive directly below Delete in file context menus.", control: { type: "toggle", key: "showArchiveMenu" } },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Metadata",
+        items: [
+          { name: "Add archive tag", desc: "Add a tag to archived Markdown notes.", control: { type: "toggle", key: "addTag" } },
+          { name: "Archive tag", desc: "Tag without the # prefix.", visible: () => s.addTag, control: { type: "text", key: "tag" } },
+          { name: "Add archived date", desc: "Record the day the note was archived.", control: { type: "toggle", key: "addArchivedDate" } },
+          { name: "Archived date property", desc: "Frontmatter property name.", visible: () => s.addArchivedDate, control: { type: "text", key: "archivedProperty" } },
+          { name: "Add created date", desc: "Record the file system creation day.", control: { type: "toggle", key: "addCreatedDate" } },
+          { name: "Created date property", desc: "Frontmatter property name.", visible: () => s.addCreatedDate, control: { type: "text", key: "createdProperty" } },
+          { name: "Add last edited date", desc: "Record the modification day from before archiving.", control: { type: "toggle", key: "addModifiedDate" } },
+          { name: "Last edited property", desc: "Frontmatter property name.", visible: () => s.addModifiedDate, control: { type: "text", key: "modifiedProperty" } },
+          {
+            name: "Date format",
+            desc: "Moment format, for example YYYY-MM-DD or DD/MM/YYYY.",
+            visible: () => s.addArchivedDate || s.addCreatedDate || s.addModifiedDate,
+            control: { type: "text", key: "dateFormat" },
+          },
+        ],
+      },
+    ];
   }
 }

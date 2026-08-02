@@ -1,8 +1,8 @@
 {
   "id": "integrated-archive",
   "name": "Integrated Archive",
-  "version": "0.1.1",
-  "minAppVersion": "1.6.6",
+  "version": "0.1.2",
+  "minAppVersion": "1.13.0",
   "description": "Archive notes instead of deleting them, with optional archive metadata.",
   "author": "0libote",
   "authorUrl": "https://github.com/0libote",
