@@ -19,17 +19,7 @@ jobs:
       - name: Verify version
         env:
           RELEASE_VERSION: ${{ github.ref_name }}
-        run: |
-          bun -e '
-            import manifest from "./manifest.json";
-            import pkg from "./package.json";
-            import versions from "./versions.json";
-            const version = process.env.RELEASE_VERSION;
-            if (!/^\d+\.\d+\.\d+$/.test(version ?? "")) throw new Error(`Invalid version tag: ${version}`);
-            if (manifest.version !== version || pkg.version !== version || !versions[version]) {
-              throw new Error("Tag, package.json, manifest.json, and versions.json must use the same version");
-            }
-          '
+        run: bun run version:check "$RELEASE_VERSION"
       - run: bun run check
       - name: Attest release asset
         uses: actions/attest@v4

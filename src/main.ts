@@ -11,43 +11,20 @@ import {
   moment,
   normalizePath,
 } from "obsidian";
-import { addCollisionSuffix, DeleteAction, isPathInFolder, resolveDeleteAction } from "./path";
+import { ArchiveManager, type ArchiveHost } from "./archive";
+import { runBatch } from "./batch";
+import { installDeletionInterceptor, type DeleteChoice } from "./delete";
+import {
+  DEFAULT_DATA,
+  sanitizeData,
+  type ArchiveData,
+  type ArchiveSettings,
+  validateArchiveFolder,
+  validateDateProperty,
+  validateTag,
+} from "./settings";
 
 const createMoment = moment as unknown as (timestamp: number) => { format(pattern: string): string };
-
-interface ArchiveSettings {
-  archiveFolder: string;
-  preserveFolders: boolean;
-  deleteAction: DeleteAction;
-  showArchiveMenu: boolean;
-  addTag: boolean;
-  tag: string;
-  addArchivedDate: boolean;
-  archivedProperty: string;
-  addCreatedDate: boolean;
-  createdProperty: string;
-  addModifiedDate: boolean;
-  modifiedProperty: string;
-  dateFormat: string;
-}
-
-const DEFAULT_SETTINGS: ArchiveSettings = {
-  archiveFolder: "Archive",
-  preserveFolders: false,
-  deleteAction: "ask",
-  showArchiveMenu: true,
-  addTag: true,
-  tag: "archived",
-  addArchivedDate: true,
-  archivedProperty: "archived",
-  addCreatedDate: true,
-  createdProperty: "created",
-  addModifiedDate: true,
-  modifiedProperty: "modified",
-  dateFormat: "YYYY-MM-DD",
-};
-
-type DeleteChoice = "archive" | "delete" | "cancel";
 
 class ArchiveDeleteModal extends Modal {
   private resolve?: (choice: DeleteChoice) => void;
@@ -80,15 +57,46 @@ class ArchiveDeleteModal extends Modal {
 }
 
 export default class IntegratedArchivePlugin extends Plugin {
-  settings: ArchiveSettings = DEFAULT_SETTINGS;
+  settings: ArchiveData = DEFAULT_DATA;
+  private archiveManager!: ArchiveManager<TFile>;
+  private readonly managedRenames = new Set<string>();
+  private settingTab!: ArchiveSettingTab;
 
   async onload(): Promise<void> {
-    const loaded = (await this.loadData() ?? {}) as Partial<ArchiveSettings> & { promptOnDelete?: boolean };
-    const { promptOnDelete, ...saved } = loaded;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved, {
-      deleteAction: resolveDeleteAction(saved.deleteAction, promptOnDelete),
-    });
-    this.addSettingTab(new ArchiveSettingTab(this.app, this));
+    await this.loadSettings();
+    const host: ArchiveHost<TFile> = {
+      createFolder: (path) => this.app.vault.createFolder(path).then(() => undefined),
+      formatDate: (timestamp, pattern) => createMoment(timestamp).format(pattern),
+      getArchiveHistory: () => this.settings.archiveHistory,
+      getEntryKind: (path) => {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        if (entry instanceof TFile) return "file";
+        return entry ? "folder" : null;
+      },
+      getFile: (path) => {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        return entry instanceof TFile ? entry : null;
+      },
+      normalizePath,
+      now: Date.now,
+      processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
+      renameFile: async (file, destination) => {
+        const originalPath = file.path;
+        this.managedRenames.add(originalPath);
+        try {
+          await this.app.fileManager.renameFile(file, destination);
+        } finally {
+          this.managedRenames.delete(originalPath);
+        }
+      },
+      saveArchiveHistory: async (records) => {
+        this.settings.archiveHistory = records;
+        await this.saveData(this.settings);
+      },
+    };
+    this.archiveManager = new ArchiveManager(host, () => this.settings);
+    this.settingTab = new ArchiveSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
 
     this.addCommand({
       id: "archive-current-file",
@@ -101,8 +109,36 @@ export default class IntegratedArchivePlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "restore-current-file",
+      name: "Restore current file from archive",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !this.isArchived(file)) return false;
+        if (!checking) void this.restore(file);
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "undo-last-archive",
+      name: "Undo last archive",
+      checkCallback: (checking) => {
+        if (!this.archiveManager.canUndo()) return false;
+        if (!checking) void this.undoLastArchive();
+        return true;
+      },
+    });
+
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
-      if (this.settings.showArchiveMenu && file instanceof TFile && !this.isArchived(file)) {
+      if (!this.settings.showArchiveMenu || !(file instanceof TFile)) return;
+      if (this.isArchived(file)) {
+        menu.addItem((item) => item
+          .setTitle("Restore from archive")
+          .setIcon("undo-2")
+          .setSection("action")
+          .onClick(() => void this.restore(file)));
+      } else {
         menu.addItem((item) => item
           .setTitle("Archive")
           .setIcon("archive")
@@ -111,49 +147,48 @@ export default class IntegratedArchivePlugin extends Plugin {
       }
     }));
 
-    const manager = this.app.fileManager;
-    const originalPrompt = manager.promptForDeletion.bind(manager);
-    const prompt = async (file: TAbstractFile): Promise<boolean> => {
-      if (!(file instanceof TFile) || this.isArchived(file) || this.settings.deleteAction === "delete") {
-        return originalPrompt(file);
+    this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
+      if (!this.settings.showArchiveMenu) return;
+      const activeFiles = files.filter((file): file is TFile => file instanceof TFile && !this.isArchived(file));
+      const archivedFiles = files.filter((file): file is TFile => file instanceof TFile && this.isArchived(file));
+      if (activeFiles.length) {
+        menu.addItem((item) => item
+          .setTitle(`Archive ${activeFiles.length} ${activeFiles.length === 1 ? "file" : "files"}`)
+          .setIcon("archive")
+          .setSection("danger")
+          .onClick(() => void this.archiveMany(activeFiles)));
       }
-      if (this.settings.deleteAction === "archive") return this.archive(file);
-      const choice = await new ArchiveDeleteModal(this.app).choose(file);
-      if (choice === "archive") return this.archive(file);
-      // trashFile respects Obsidian's configured system, vault, or permanent deletion setting.
-      if (choice === "delete") await manager.trashFile(file);
-      return choice === "delete";
-    };
-    manager.promptForDeletion = prompt;
-    this.register(() => {
-      if (manager.promptForDeletion === prompt) manager.promptForDeletion = originalPrompt;
-    });
+      if (archivedFiles.length) {
+        menu.addItem((item) => item
+          .setTitle(`Restore ${archivedFiles.length} ${archivedFiles.length === 1 ? "file" : "files"}`)
+          .setIcon("undo-2")
+          .setSection("action")
+          .onClick(() => void this.restoreMany(archivedFiles)));
+      }
+    }));
+
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (file instanceof TFile && !this.managedRenames.has(oldPath)) void this.reconcileExternalRename(file, oldPath);
+    }));
+
+    this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
+      archive: (file) => this.archive(file),
+      choose: (file) => new ArchiveDeleteModal(this.app).choose(file),
+      getAction: () => this.settings.deleteAction,
+      isArchived: (file) => this.isArchived(file),
+      isFile: (file): file is TFile => file instanceof TFile,
+    }));
+  }
+
+  async onExternalSettingsChange(): Promise<void> {
+    await this.loadSettings();
+    this.settingTab.update();
   }
 
   async archive(file: TFile): Promise<boolean> {
     try {
-      const archiveFolder = normalizePath(this.settings.archiveFolder.trim());
-      if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
-      if (isPathInFolder(file.path, archiveFolder)) {
-        new Notice(`${file.name} is already archived.`);
-        return false;
-      }
-
-      const created = file.stat.ctime;
-      const modified = file.stat.mtime;
-      const relativePath = this.settings.preserveFolders ? file.path : file.name;
-      const wantedPath = normalizePath(`${archiveFolder}/${relativePath}`);
-      await this.ensureFolder(wantedPath.slice(0, wantedPath.lastIndexOf("/")));
-      const destination = this.uniquePath(wantedPath);
-      await this.app.fileManager.renameFile(file, destination);
-      try {
-        await this.addMetadata(file, created, modified);
-      } catch (error) {
-        console.error("Integrated Archive metadata:", error);
-        new Notice(`Archived to ${destination}, but its metadata could not be updated.`);
-        return true;
-      }
-      new Notice(`Archived to ${destination}`);
+      const result = await this.archiveManager.archive(file);
+      this.reportArchiveResult(result);
       return true;
     } catch (error) {
       console.error("Integrated Archive:", error);
@@ -162,47 +197,99 @@ export default class IntegratedArchivePlugin extends Plugin {
     }
   }
 
-  private isArchived(file: TFile): boolean {
-    const folder = normalizePath(this.settings.archiveFolder.trim());
-    return !!folder && folder !== "." && isPathInFolder(file.path, folder);
-  }
-
-  private async ensureFolder(path: string): Promise<void> {
-    let current = "";
-    for (const part of path.split("/")) {
-      current = current ? `${current}/${part}` : part;
-      const existing = this.app.vault.getAbstractFileByPath(current);
-      if (existing instanceof TFile) throw new Error(`${current} is a file, not a folder.`);
-      if (!existing) await this.app.vault.createFolder(current);
+  async restore(file: TFile): Promise<boolean> {
+    try {
+      const result = await this.archiveManager.restore(file);
+      this.reportRestoreResult(result);
+      return true;
+    } catch (error) {
+      console.error("Integrated Archive restore:", error);
+      new Notice(`Could not restore ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
     }
   }
 
-  private uniquePath(path: string): string {
-    let number = 0;
-    while (this.app.vault.getAbstractFileByPath(addCollisionSuffix(path, number))) number++;
-    return addCollisionSuffix(path, number);
+  private async archiveMany(files: TFile[]): Promise<void> {
+    const result = await runBatch(files, (file) => this.archiveManager.archive(file));
+    for (const failure of result.failed) console.error(`Integrated Archive ${failure.item.path}:`, failure.error);
+    const warnings = result.succeeded.filter(({ result: item }) => item.metadataError || item.historyError).length;
+    new Notice(this.batchNotice("Archived", result.succeeded.length, result.failed.length, warnings));
   }
 
-  private async addMetadata(file: TFile, created: number, modified: number): Promise<void> {
-    if (file.extension !== "md") return;
-    const s = this.settings;
-    if (!s.addTag && !s.addArchivedDate && !s.addCreatedDate && !s.addModifiedDate) return;
+  private async restoreMany(files: TFile[]): Promise<void> {
+    const result = await runBatch(files, (file) => this.archiveManager.restore(file));
+    for (const failure of result.failed) console.error(`Integrated Archive restore ${failure.item.path}:`, failure.error);
+    const warnings = result.succeeded.filter(({ result: item }) =>
+      item.historyError || item.metadataError || item.inferredOriginalPath).length;
+    new Notice(this.batchNotice("Restored", result.succeeded.length, result.failed.length, warnings));
+  }
 
-    await this.app.fileManager.processFrontMatter(file, (frontmatter: Record<string, unknown>) => {
-      if (s.addTag && s.tag.trim()) {
-        const tag = s.tag.trim().replace(/^#/, "");
-        const tags = Array.isArray(frontmatter.tags)
-          ? frontmatter.tags.map((value: unknown) => String(value))
-          : typeof frontmatter.tags === "string"
-            ? frontmatter.tags.split(/[ ,]+/).filter(Boolean)
-            : [];
-        frontmatter.tags = [...new Set([...tags, tag])];
-      }
-      const format = (timestamp: number) => createMoment(timestamp).format(s.dateFormat || DEFAULT_SETTINGS.dateFormat);
-      if (s.addArchivedDate && s.archivedProperty.trim()) frontmatter[s.archivedProperty.trim()] = format(Date.now());
-      if (s.addCreatedDate && s.createdProperty.trim()) frontmatter[s.createdProperty.trim()] = format(created);
-      if (s.addModifiedDate && s.modifiedProperty.trim()) frontmatter[s.modifiedProperty.trim()] = format(modified);
-    });
+  private async undoLastArchive(): Promise<void> {
+    try {
+      const result = await this.archiveManager.undoLastArchive();
+      this.reportRestoreResult(result);
+    } catch (error) {
+      console.error("Integrated Archive undo:", error);
+      new Notice(`Could not undo archive: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  private isArchived(file: TFile): boolean {
+    return this.archiveManager.isArchived(file);
+  }
+
+  private async loadSettings(): Promise<void> {
+    this.settings = sanitizeData(await this.loadData());
+  }
+
+  private reportArchiveResult(result: Awaited<ReturnType<ArchiveManager<TFile>["archive"]>>): void {
+    if (result.metadataError) console.error("Integrated Archive metadata:", result.metadataError);
+    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
+    if (result.metadataError || result.historyError) {
+      const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
+      new Notice(`Archived to ${result.destination}, but ${failed} could not be updated.`);
+    } else {
+      new Notice(`Archived to ${result.destination}`);
+    }
+  }
+
+  private batchNotice(verb: string, succeeded: number, failed: number, warnings: number): string {
+    const details = [failed && `${failed} failed`, warnings && `${warnings} completed with warnings`].filter(Boolean);
+    const noun = succeeded === 1 ? "file" : "files";
+    const suffix = details.length ? `; ${details.join("; ")}` : "";
+    return `${verb} ${succeeded} ${noun}${suffix}.`;
+  }
+
+  private reportRestoreResult(result: Awaited<ReturnType<ArchiveManager<TFile>["restore"]>>): void {
+    if (result.metadataError) console.error("Integrated Archive metadata restore:", result.metadataError);
+    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
+    const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
+    if (failed) {
+      new Notice(`Restored to ${result.destination}, but ${failed} could not be updated.`);
+    } else if (result.inferredOriginalPath) {
+      new Notice(`Restored to ${result.destination}. The original location was inferred because no history was available.`);
+    } else {
+      new Notice(`Restored to ${result.destination}`);
+    }
+  }
+
+  private async reconcileExternalRename(file: TFile, oldPath: string): Promise<void> {
+    const records = [...this.settings.archiveHistory];
+    const index = records.findIndex((record) => record.archivedPath === oldPath);
+    if (index < 0) return;
+
+    if (this.isArchived(file)) {
+      const record = records[index];
+      if (record) records[index] = { ...record, archivedPath: file.path };
+    } else {
+      records.splice(index, 1);
+    }
+    try {
+      this.settings.archiveHistory = records;
+      await this.saveData(this.settings);
+    } catch (error) {
+      console.error("Integrated Archive history reconciliation:", error);
+    }
   }
 }
 
@@ -223,7 +310,11 @@ class ArchiveSettingTab extends PluginSettingTab {
         type: "group",
         heading: "Archiving",
         items: [
-          { name: "Archive folder", desc: "Path relative to the vault root.", control: { type: "text", key: "archiveFolder", placeholder: "Archive" } },
+          {
+            name: "Archive folder",
+            desc: "Path relative to the vault root.",
+            control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: validateArchiveFolder },
+          },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           {
             name: "When deleting",
@@ -238,13 +329,39 @@ class ArchiveSettingTab extends PluginSettingTab {
         heading: "Metadata",
         items: [
           { name: "Add archive tag", desc: "Add a tag to archived Markdown notes.", control: { type: "toggle", key: "addTag" } },
-          { name: "Archive tag", desc: "Tag without the # prefix.", visible: () => s.addTag, control: { type: "text", key: "tag" } },
+          {
+            name: "Archive tag",
+            desc: "Tag without the # prefix.",
+            visible: () => s.addTag,
+            control: { type: "text", key: "tag", validate: validateTag },
+          },
           { name: "Add archived date", desc: "Record the day the note was archived.", control: { type: "toggle", key: "addArchivedDate" } },
-          { name: "Archived date property", desc: "Frontmatter property name.", visible: () => s.addArchivedDate, control: { type: "text", key: "archivedProperty" } },
+          {
+            name: "Archived date property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addArchivedDate,
+            control: { type: "text", key: "archivedProperty", validate: (value) => validateDateProperty(s, "archivedProperty", value) },
+          },
           { name: "Add created date", desc: "Record the file system creation day.", control: { type: "toggle", key: "addCreatedDate" } },
-          { name: "Created date property", desc: "Frontmatter property name.", visible: () => s.addCreatedDate, control: { type: "text", key: "createdProperty" } },
+          {
+            name: "Created date property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addCreatedDate,
+            control: { type: "text", key: "createdProperty", validate: (value) => validateDateProperty(s, "createdProperty", value) },
+          },
           { name: "Add last edited date", desc: "Record the modification day from before archiving.", control: { type: "toggle", key: "addModifiedDate" } },
-          { name: "Last edited property", desc: "Frontmatter property name.", visible: () => s.addModifiedDate, control: { type: "text", key: "modifiedProperty" } },
+          {
+            name: "Last edited property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addModifiedDate,
+            control: { type: "text", key: "modifiedProperty", validate: (value) => validateDateProperty(s, "modifiedProperty", value) },
+          },
+          {
+            name: "Existing created and edited dates",
+            desc: "Choose whether archiving replaces values already stored in those properties.",
+            visible: () => s.addCreatedDate || s.addModifiedDate,
+            control: { type: "dropdown", key: "existingDateAction", options: { preserve: "Keep existing", overwrite: "Replace existing" } },
+          },
           {
             name: "Date format",
             desc: "Moment format, for example YYYY-MM-DD or DD/MM/YYYY.",

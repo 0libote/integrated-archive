@@ -1,6 +1,6 @@
 {
   "name": "integrated-archive",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "description": "Archive notes instead of deleting them, with optional archive metadata.",
   "private": true,
   "license": "MIT",
@@ -11,11 +11,23 @@
     "dev": "bun esbuild.config.mjs",
     "build": "tsc --noEmit && bun esbuild.config.mjs production",
     "test": "bun test",
-    "check": "bun run build && bun test"
+    "lint": "eslint .",
+    "version:check": "bun scripts/version.mjs --check",
+    "bump": "bun scripts/version.mjs",
+    "check": "bun run version:check && bun run build && bun run lint && bun test"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^22.15.17",
     "esbuild": "^0.28.1",
+    "eslint": "^9.39.4",
+    "eslint-plugin-obsidianmd": "^0.4.1",
+    "globals": "^17.6.0",
+    "jiti": "^2.6.1",
     "obsidian": "1.13.1",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "monkey-around": "3.0.0"
   }
 }
