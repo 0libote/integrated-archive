@@ -133,6 +133,29 @@ test("merges tags and writes all configured dates", async () => {
   assert.equal(file.frontmatter.modified, "FORMAT:200");
 });
 
+test("preserves existing created and modified dates by default", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  file.frontmatter = { archived: "old", created: "original-created", modified: "original-modified" };
+
+  await fixture.manager.archive(file);
+
+  assert.equal(file.frontmatter.archived, "YYYY-MM-DD:300");
+  assert.equal(file.frontmatter.created, "original-created");
+  assert.equal(file.frontmatter.modified, "original-modified");
+});
+
+test("replaces existing created and modified dates when configured", async () => {
+  const fixture = makeFixture({ existingDateAction: "overwrite" });
+  const file = makeFile();
+  file.frontmatter = { created: "old", modified: "old" };
+
+  await fixture.manager.archive(file);
+
+  assert.equal(file.frontmatter.created, "YYYY-MM-DD:100");
+  assert.equal(file.frontmatter.modified, "YYYY-MM-DD:200");
+});
+
 test("does not process frontmatter for non-Markdown files", async () => {
   const fixture = makeFixture();
   const file = makeFile("Assets/image.png");

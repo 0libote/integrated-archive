@@ -13,8 +13,14 @@ import {
 } from "obsidian";
 import { ArchiveManager, type ArchiveHost } from "./archive";
 import { installDeletionInterceptor, type DeleteChoice } from "./delete";
-import { resolveDeleteAction } from "./path";
-import { DEFAULT_SETTINGS, type ArchiveSettings } from "./settings";
+import {
+  DEFAULT_SETTINGS,
+  sanitizeSettings,
+  type ArchiveSettings,
+  validateArchiveFolder,
+  validateDateProperty,
+  validateTag,
+} from "./settings";
 
 const createMoment = moment as unknown as (timestamp: number) => { format(pattern: string): string };
 
@@ -51,13 +57,10 @@ class ArchiveDeleteModal extends Modal {
 export default class IntegratedArchivePlugin extends Plugin {
   settings: ArchiveSettings = DEFAULT_SETTINGS;
   private archiveManager!: ArchiveManager<TFile>;
+  private settingTab!: ArchiveSettingTab;
 
   async onload(): Promise<void> {
-    const loaded = (await this.loadData() ?? {}) as Partial<ArchiveSettings> & { promptOnDelete?: boolean };
-    const { promptOnDelete, ...saved } = loaded;
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, saved, {
-      deleteAction: resolveDeleteAction(saved.deleteAction, promptOnDelete),
-    });
+    await this.loadSettings();
     const host: ArchiveHost<TFile> = {
       createFolder: (path) => this.app.vault.createFolder(path).then(() => undefined),
       formatDate: (timestamp, pattern) => createMoment(timestamp).format(pattern),
@@ -71,7 +74,8 @@ export default class IntegratedArchivePlugin extends Plugin {
       renameFile: (file, destination) => this.app.fileManager.renameFile(file, destination),
     };
     this.archiveManager = new ArchiveManager(host, () => this.settings);
-    this.addSettingTab(new ArchiveSettingTab(this.app, this));
+    this.settingTab = new ArchiveSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
 
     this.addCommand({
       id: "archive-current-file",
@@ -103,6 +107,11 @@ export default class IntegratedArchivePlugin extends Plugin {
     }));
   }
 
+  async onExternalSettingsChange(): Promise<void> {
+    await this.loadSettings();
+    this.settingTab.update();
+  }
+
   async archive(file: TFile): Promise<boolean> {
     try {
       const result = await this.archiveManager.archive(file);
@@ -123,6 +132,10 @@ export default class IntegratedArchivePlugin extends Plugin {
   private isArchived(file: TFile): boolean {
     return this.archiveManager.isArchived(file);
   }
+
+  private async loadSettings(): Promise<void> {
+    this.settings = sanitizeSettings(await this.loadData());
+  }
 }
 
 class ArchiveSettingTab extends PluginSettingTab {
@@ -142,7 +155,11 @@ class ArchiveSettingTab extends PluginSettingTab {
         type: "group",
         heading: "Archiving",
         items: [
-          { name: "Archive folder", desc: "Path relative to the vault root.", control: { type: "text", key: "archiveFolder", placeholder: "Archive" } },
+          {
+            name: "Archive folder",
+            desc: "Path relative to the vault root.",
+            control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: validateArchiveFolder },
+          },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           {
             name: "When deleting",
@@ -157,13 +174,39 @@ class ArchiveSettingTab extends PluginSettingTab {
         heading: "Metadata",
         items: [
           { name: "Add archive tag", desc: "Add a tag to archived Markdown notes.", control: { type: "toggle", key: "addTag" } },
-          { name: "Archive tag", desc: "Tag without the # prefix.", visible: () => s.addTag, control: { type: "text", key: "tag" } },
+          {
+            name: "Archive tag",
+            desc: "Tag without the # prefix.",
+            visible: () => s.addTag,
+            control: { type: "text", key: "tag", validate: validateTag },
+          },
           { name: "Add archived date", desc: "Record the day the note was archived.", control: { type: "toggle", key: "addArchivedDate" } },
-          { name: "Archived date property", desc: "Frontmatter property name.", visible: () => s.addArchivedDate, control: { type: "text", key: "archivedProperty" } },
+          {
+            name: "Archived date property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addArchivedDate,
+            control: { type: "text", key: "archivedProperty", validate: (value) => validateDateProperty(s, "archivedProperty", value) },
+          },
           { name: "Add created date", desc: "Record the file system creation day.", control: { type: "toggle", key: "addCreatedDate" } },
-          { name: "Created date property", desc: "Frontmatter property name.", visible: () => s.addCreatedDate, control: { type: "text", key: "createdProperty" } },
+          {
+            name: "Created date property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addCreatedDate,
+            control: { type: "text", key: "createdProperty", validate: (value) => validateDateProperty(s, "createdProperty", value) },
+          },
           { name: "Add last edited date", desc: "Record the modification day from before archiving.", control: { type: "toggle", key: "addModifiedDate" } },
-          { name: "Last edited property", desc: "Frontmatter property name.", visible: () => s.addModifiedDate, control: { type: "text", key: "modifiedProperty" } },
+          {
+            name: "Last edited property",
+            desc: "Frontmatter property name.",
+            visible: () => s.addModifiedDate,
+            control: { type: "text", key: "modifiedProperty", validate: (value) => validateDateProperty(s, "modifiedProperty", value) },
+          },
+          {
+            name: "Existing created and edited dates",
+            desc: "Choose whether archiving replaces values already stored in those properties.",
+            visible: () => s.addCreatedDate || s.addModifiedDate,
+            control: { type: "dropdown", key: "existingDateAction", options: { preserve: "Keep existing", overwrite: "Replace existing" } },
+          },
           {
             name: "Date format",
             desc: "Moment format, for example YYYY-MM-DD or DD/MM/YYYY.",

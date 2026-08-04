@@ -1,5 +1,5 @@
 import { addCollisionSuffix, isPathInFolder } from "./path";
-import type { ArchiveSettings } from "./settings";
+import { normalizeTag, type ArchiveSettings } from "./settings";
 
 export interface ArchiveFile {
   extension: string;
@@ -87,25 +87,32 @@ export class ArchiveManager<File extends ArchiveFile> {
 
     await this.host.processFrontMatter(file, (frontmatter) => {
       if (settings.addTag && settings.tag.trim()) {
-        const tag = settings.tag.trim().replace(/^#/, "");
+        const tag = normalizeTag(settings.tag);
         const tags = Array.isArray(frontmatter.tags)
           ? frontmatter.tags.map((value: unknown) => String(value))
           : typeof frontmatter.tags === "string"
             ? frontmatter.tags.split(/[ ,]+/).filter(Boolean)
             : [];
-        frontmatter.tags = [...new Set([...tags, tag])];
+        if (tag) frontmatter.tags = [...new Set([...tags, tag])];
       }
       const format = (timestamp: number) => this.host.formatDate(timestamp, settings.dateFormat || DEFAULT_DATE_FORMAT);
       if (settings.addArchivedDate && settings.archivedProperty.trim()) {
         frontmatter[settings.archivedProperty.trim()] = format(this.host.now());
       }
       if (settings.addCreatedDate && settings.createdProperty.trim()) {
-        frontmatter[settings.createdProperty.trim()] = format(created);
+        this.setHistoricalDate(frontmatter, settings.createdProperty.trim(), format(created));
       }
       if (settings.addModifiedDate && settings.modifiedProperty.trim()) {
-        frontmatter[settings.modifiedProperty.trim()] = format(modified);
+        this.setHistoricalDate(frontmatter, settings.modifiedProperty.trim(), format(modified));
       }
     });
+  }
+
+  private setHistoricalDate(frontmatter: Record<string, unknown>, property: string, value: string): void {
+    if (this.getSettings().existingDateAction === "overwrite"
+      || !Object.prototype.hasOwnProperty.call(frontmatter, property)) {
+      frontmatter[property] = value;
+    }
   }
 }
 
