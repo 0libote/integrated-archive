@@ -70,7 +70,8 @@ export default class IntegratedArchivePlugin extends Plugin {
       getArchiveHistory: () => this.settings.archiveHistory,
       getEntryKind: (path) => {
         const entry = this.app.vault.getAbstractFileByPath(path);
-        return entry instanceof TFile ? "file" : entry ? "folder" : null;
+        if (entry instanceof TFile) return "file";
+        return entry ? "folder" : null;
       },
       getFile: (path) => {
         const entry = this.app.vault.getAbstractFileByPath(path);
@@ -254,7 +255,9 @@ export default class IntegratedArchivePlugin extends Plugin {
 
   private batchNotice(verb: string, succeeded: number, failed: number, warnings: number): string {
     const details = [failed && `${failed} failed`, warnings && `${warnings} completed with warnings`].filter(Boolean);
-    return `${verb} ${succeeded} ${succeeded === 1 ? "file" : "files"}${details.length ? `; ${details.join("; ")}` : ""}.`;
+    const noun = succeeded === 1 ? "file" : "files";
+    const suffix = details.length ? `; ${details.join("; ")}` : "";
+    return `${verb} ${succeeded} ${noun}${suffix}.`;
   }
 
   private reportRestoreResult(result: Awaited<ReturnType<ArchiveManager<TFile>["restore"]>>): void {

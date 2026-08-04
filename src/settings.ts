@@ -136,14 +136,14 @@ export function validateTag(value: string): string | undefined {
   const tag = value.trim().replace(/^#+/, "");
   if (!tag) return "Enter a tag.";
   if (/\s|[,#]/.test(tag)) return "Tags cannot contain spaces, commas, or # characters.";
-  if (!/[^0-9]/.test(tag)) return "Tags must contain at least one non-numeric character.";
+  if (!/\D/.test(tag)) return "Tags must contain at least one non-numeric character.";
   return undefined;
 }
 
 export function validatePropertyName(value: string): string | undefined {
   const property = value.trim();
   if (!property) return "Enter a property name.";
-  if (/\r|\n/.test(value)) return "Property names must fit on one line.";
+  if (/[\r\n]/.test(value)) return "Property names must fit on one line.";
   if (RESERVED_PROPERTY_NAMES.has(property)) return "Choose a different property name.";
   return undefined;
 }

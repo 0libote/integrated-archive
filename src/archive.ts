@@ -189,11 +189,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     await this.host.processFrontMatter(file, (frontmatter) => {
       if (settings.addTag && settings.tag.trim()) {
         const tag = normalizeTag(settings.tag);
-        const tags = Array.isArray(frontmatter.tags)
-          ? frontmatter.tags.map((value: unknown) => String(value))
-          : typeof frontmatter.tags === "string"
-            ? frontmatter.tags.split(/[ ,]+/).filter(Boolean)
-            : [];
+        const tags = this.readTags(frontmatter.tags);
         if (tag && !tags.some((existing) => normalizeTag(existing) === tag)) {
           this.captureProperty(snapshot, frontmatter, "tags");
           frontmatter.tags = [...tags, tag];
@@ -213,6 +209,12 @@ export class ArchiveManager<File extends ArchiveFile> {
       }
     });
     return snapshot.properties.length ? snapshot : undefined;
+  }
+
+  private readTags(value: unknown): string[] {
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === "string") return value.split(/[ ,]+/).filter(Boolean);
+    return [];
   }
 
   private setHistoricalDate(
