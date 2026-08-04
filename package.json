@@ -17,5 +17,8 @@
     "esbuild": "^0.28.1",
     "obsidian": "1.13.1",
     "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "monkey-around": "3.0.0"
   }
 }

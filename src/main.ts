@@ -12,12 +12,11 @@ import {
   normalizePath,
 } from "obsidian";
 import { ArchiveManager, type ArchiveHost } from "./archive";
+import { installDeletionInterceptor, type DeleteChoice } from "./delete";
 import { resolveDeleteAction } from "./path";
 import { DEFAULT_SETTINGS, type ArchiveSettings } from "./settings";
 
 const createMoment = moment as unknown as (timestamp: number) => { format(pattern: string): string };
-
-type DeleteChoice = "archive" | "delete" | "cancel";
 
 class ArchiveDeleteModal extends Modal {
   private resolve?: (choice: DeleteChoice) => void;
@@ -95,23 +94,13 @@ export default class IntegratedArchivePlugin extends Plugin {
       }
     }));
 
-    const manager = this.app.fileManager;
-    const originalPrompt = manager.promptForDeletion.bind(manager);
-    const prompt = async (file: TAbstractFile): Promise<boolean> => {
-      if (!(file instanceof TFile) || this.isArchived(file) || this.settings.deleteAction === "delete") {
-        return originalPrompt(file);
-      }
-      if (this.settings.deleteAction === "archive") return this.archive(file);
-      const choice = await new ArchiveDeleteModal(this.app).choose(file);
-      if (choice === "archive") return this.archive(file);
-      // trashFile respects Obsidian's configured system, vault, or permanent deletion setting.
-      if (choice === "delete") await manager.trashFile(file);
-      return choice === "delete";
-    };
-    manager.promptForDeletion = prompt;
-    this.register(() => {
-      if (manager.promptForDeletion === prompt) manager.promptForDeletion = originalPrompt;
-    });
+    this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
+      archive: (file) => this.archive(file),
+      choose: (file) => new ArchiveDeleteModal(this.app).choose(file),
+      getAction: () => this.settings.deleteAction,
+      isArchived: (file) => this.isArchived(file),
+      isFile: (file): file is TFile => file instanceof TFile,
+    }));
   }
 
   async archive(file: TFile): Promise<boolean> {
