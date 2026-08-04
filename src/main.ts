@@ -12,10 +12,12 @@ import {
   normalizePath,
 } from "obsidian";
 import { ArchiveManager, type ArchiveHost } from "./archive";
+import { runBatch } from "./batch";
 import { installDeletionInterceptor, type DeleteChoice } from "./delete";
 import {
-  DEFAULT_SETTINGS,
-  sanitizeSettings,
+  DEFAULT_DATA,
+  sanitizeData,
+  type ArchiveData,
   type ArchiveSettings,
   validateArchiveFolder,
   validateDateProperty,
@@ -55,8 +57,9 @@ class ArchiveDeleteModal extends Modal {
 }
 
 export default class IntegratedArchivePlugin extends Plugin {
-  settings: ArchiveSettings = DEFAULT_SETTINGS;
+  settings: ArchiveData = DEFAULT_DATA;
   private archiveManager!: ArchiveManager<TFile>;
+  private readonly managedRenames = new Set<string>();
   private settingTab!: ArchiveSettingTab;
 
   async onload(): Promise<void> {
@@ -64,14 +67,31 @@ export default class IntegratedArchivePlugin extends Plugin {
     const host: ArchiveHost<TFile> = {
       createFolder: (path) => this.app.vault.createFolder(path).then(() => undefined),
       formatDate: (timestamp, pattern) => createMoment(timestamp).format(pattern),
+      getArchiveHistory: () => this.settings.archiveHistory,
       getEntryKind: (path) => {
         const entry = this.app.vault.getAbstractFileByPath(path);
         return entry instanceof TFile ? "file" : entry ? "folder" : null;
       },
+      getFile: (path) => {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        return entry instanceof TFile ? entry : null;
+      },
       normalizePath,
       now: Date.now,
       processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
-      renameFile: (file, destination) => this.app.fileManager.renameFile(file, destination),
+      renameFile: async (file, destination) => {
+        const originalPath = file.path;
+        this.managedRenames.add(originalPath);
+        try {
+          await this.app.fileManager.renameFile(file, destination);
+        } finally {
+          this.managedRenames.delete(originalPath);
+        }
+      },
+      saveArchiveHistory: async (records) => {
+        this.settings.archiveHistory = records;
+        await this.saveData(this.settings);
+      },
     };
     this.archiveManager = new ArchiveManager(host, () => this.settings);
     this.settingTab = new ArchiveSettingTab(this.app, this);
@@ -88,14 +108,66 @@ export default class IntegratedArchivePlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "restore-current-file",
+      name: "Restore current file from archive",
+      checkCallback: (checking) => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !this.isArchived(file)) return false;
+        if (!checking) void this.restore(file);
+        return true;
+      },
+    });
+
+    this.addCommand({
+      id: "undo-last-archive",
+      name: "Undo last archive",
+      checkCallback: (checking) => {
+        if (!this.archiveManager.canUndo()) return false;
+        if (!checking) void this.undoLastArchive();
+        return true;
+      },
+    });
+
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
-      if (this.settings.showArchiveMenu && file instanceof TFile && !this.isArchived(file)) {
+      if (!this.settings.showArchiveMenu || !(file instanceof TFile)) return;
+      if (this.isArchived(file)) {
+        menu.addItem((item) => item
+          .setTitle("Restore from archive")
+          .setIcon("undo-2")
+          .setSection("action")
+          .onClick(() => void this.restore(file)));
+      } else {
         menu.addItem((item) => item
           .setTitle("Archive")
           .setIcon("archive")
           .setSection("danger")
           .onClick(() => void this.archive(file)));
       }
+    }));
+
+    this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
+      if (!this.settings.showArchiveMenu) return;
+      const activeFiles = files.filter((file): file is TFile => file instanceof TFile && !this.isArchived(file));
+      const archivedFiles = files.filter((file): file is TFile => file instanceof TFile && this.isArchived(file));
+      if (activeFiles.length) {
+        menu.addItem((item) => item
+          .setTitle(`Archive ${activeFiles.length} ${activeFiles.length === 1 ? "file" : "files"}`)
+          .setIcon("archive")
+          .setSection("danger")
+          .onClick(() => void this.archiveMany(activeFiles)));
+      }
+      if (archivedFiles.length) {
+        menu.addItem((item) => item
+          .setTitle(`Restore ${archivedFiles.length} ${archivedFiles.length === 1 ? "file" : "files"}`)
+          .setIcon("undo-2")
+          .setSection("action")
+          .onClick(() => void this.restoreMany(archivedFiles)));
+      }
+    }));
+
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (file instanceof TFile && !this.managedRenames.has(oldPath)) void this.reconcileExternalRename(file, oldPath);
     }));
 
     this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
@@ -115,12 +187,7 @@ export default class IntegratedArchivePlugin extends Plugin {
   async archive(file: TFile): Promise<boolean> {
     try {
       const result = await this.archiveManager.archive(file);
-      if (result.metadataError) {
-        console.error("Integrated Archive metadata:", result.metadataError);
-        new Notice(`Archived to ${result.destination}, but its metadata could not be updated.`);
-        return true;
-      }
-      new Notice(`Archived to ${result.destination}`);
+      this.reportArchiveResult(result);
       return true;
     } catch (error) {
       console.error("Integrated Archive:", error);
@@ -129,12 +196,95 @@ export default class IntegratedArchivePlugin extends Plugin {
     }
   }
 
+  async restore(file: TFile): Promise<boolean> {
+    try {
+      const result = await this.archiveManager.restore(file);
+      if (result.historyError) {
+        console.error("Integrated Archive history:", result.historyError);
+        new Notice(`Restored to ${result.destination}, but archive history could not be updated.`);
+      } else if (result.inferredOriginalPath) {
+        new Notice(`Restored to ${result.destination}. The original location was inferred because no history was available.`);
+      } else {
+        new Notice(`Restored to ${result.destination}`);
+      }
+      return true;
+    } catch (error) {
+      console.error("Integrated Archive restore:", error);
+      new Notice(`Could not restore ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  private async archiveMany(files: TFile[]): Promise<void> {
+    const result = await runBatch(files, (file) => this.archiveManager.archive(file));
+    for (const failure of result.failed) console.error(`Integrated Archive ${failure.item.path}:`, failure.error);
+    const warnings = result.succeeded.filter(({ result: item }) => item.metadataError || item.historyError).length;
+    new Notice(this.batchNotice("Archived", result.succeeded.length, result.failed.length, warnings));
+  }
+
+  private async restoreMany(files: TFile[]): Promise<void> {
+    const result = await runBatch(files, (file) => this.archiveManager.restore(file));
+    for (const failure of result.failed) console.error(`Integrated Archive restore ${failure.item.path}:`, failure.error);
+    const warnings = result.succeeded.filter(({ result: item }) => item.historyError || item.inferredOriginalPath).length;
+    new Notice(this.batchNotice("Restored", result.succeeded.length, result.failed.length, warnings));
+  }
+
+  private async undoLastArchive(): Promise<void> {
+    try {
+      const result = await this.archiveManager.undoLastArchive();
+      if (result.historyError) {
+        console.error("Integrated Archive history:", result.historyError);
+        new Notice(`Restored to ${result.destination}, but archive history could not be updated.`);
+      } else {
+        new Notice(`Restored to ${result.destination}`);
+      }
+    } catch (error) {
+      console.error("Integrated Archive undo:", error);
+      new Notice(`Could not undo archive: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
   private isArchived(file: TFile): boolean {
     return this.archiveManager.isArchived(file);
   }
 
   private async loadSettings(): Promise<void> {
-    this.settings = sanitizeSettings(await this.loadData());
+    this.settings = sanitizeData(await this.loadData());
+  }
+
+  private reportArchiveResult(result: Awaited<ReturnType<ArchiveManager<TFile>["archive"]>>): void {
+    if (result.metadataError) console.error("Integrated Archive metadata:", result.metadataError);
+    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
+    if (result.metadataError || result.historyError) {
+      const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
+      new Notice(`Archived to ${result.destination}, but ${failed} could not be updated.`);
+    } else {
+      new Notice(`Archived to ${result.destination}`);
+    }
+  }
+
+  private batchNotice(verb: string, succeeded: number, failed: number, warnings: number): string {
+    const details = [failed && `${failed} failed`, warnings && `${warnings} completed with warnings`].filter(Boolean);
+    return `${verb} ${succeeded} ${succeeded === 1 ? "file" : "files"}${details.length ? `; ${details.join("; ")}` : ""}.`;
+  }
+
+  private async reconcileExternalRename(file: TFile, oldPath: string): Promise<void> {
+    const records = [...this.settings.archiveHistory];
+    const index = records.findIndex((record) => record.archivedPath === oldPath);
+    if (index < 0) return;
+
+    if (this.isArchived(file)) {
+      const record = records[index];
+      if (record) records[index] = { ...record, archivedPath: file.path };
+    } else {
+      records.splice(index, 1);
+    }
+    try {
+      this.settings.archiveHistory = records;
+      await this.saveData(this.settings);
+    } catch (error) {
+      console.error("Integrated Archive history reconciliation:", error);
+    }
   }
 }
 

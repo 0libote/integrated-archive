@@ -4,6 +4,12 @@ import { resolveDeleteAction } from "./path";
 export type ExistingDateAction = "preserve" | "overwrite";
 export type DatePropertyKey = "archivedProperty" | "createdProperty" | "modifiedProperty";
 
+export interface ArchiveRecord {
+  archivedAt: number;
+  archivedPath: string;
+  originalPath: string;
+}
+
 export interface ArchiveSettings {
   archiveFolder: string;
   preserveFolders: boolean;
@@ -21,6 +27,10 @@ export interface ArchiveSettings {
   existingDateAction: ExistingDateAction;
 }
 
+export interface ArchiveData extends ArchiveSettings {
+  archiveHistory: ArchiveRecord[];
+}
+
 export const DEFAULT_SETTINGS: ArchiveSettings = {
   archiveFolder: "Archive",
   preserveFolders: false,
@@ -36,6 +46,11 @@ export const DEFAULT_SETTINGS: ArchiveSettings = {
   modifiedProperty: "modified",
   dateFormat: "YYYY-MM-DD",
   existingDateAction: "preserve",
+};
+
+export const DEFAULT_DATA: ArchiveData = {
+  ...DEFAULT_SETTINGS,
+  archiveHistory: [],
 };
 
 const BOOLEAN_KEYS = [
@@ -56,10 +71,8 @@ const STRING_KEYS = [
   "dateFormat",
 ] as const;
 
-type StoredSettings = Partial<ArchiveSettings> & { promptOnDelete?: unknown };
-
 export function sanitizeSettings(value: unknown): ArchiveSettings {
-  const stored: StoredSettings = isRecord(value) ? value : {};
+  const stored = isRecord(value) ? value : {};
   const settings = { ...DEFAULT_SETTINGS };
 
   for (const key of BOOLEAN_KEYS) {
@@ -84,6 +97,13 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
   repairDuplicateDateProperties(settings);
 
   return settings;
+}
+
+export function sanitizeData(value: unknown): ArchiveData {
+  const settings = sanitizeSettings(value);
+  const stored = isRecord(value) && Array.isArray(value.archiveHistory) ? value.archiveHistory : [];
+  const archiveHistory = stored.filter(isArchiveRecord).slice(-MAX_ARCHIVE_HISTORY);
+  return { ...settings, archiveHistory };
 }
 
 export function normalizeTag(value: string): string | null {
@@ -132,9 +152,21 @@ export function validateDateProperty(
   return undefined;
 }
 
-function isRecord(value: unknown): value is StoredSettings {
+function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
+
+function isArchiveRecord(value: unknown): value is ArchiveRecord {
+  return isRecord(value)
+    && typeof value.archivedAt === "number"
+    && Number.isFinite(value.archivedAt)
+    && typeof value.archivedPath === "string"
+    && !!value.archivedPath
+    && typeof value.originalPath === "string"
+    && !!value.originalPath;
+}
+
+export const MAX_ARCHIVE_HISTORY = 200;
 
 const DATE_PROPERTY_KEYS: DatePropertyKey[] = ["archivedProperty", "createdProperty", "modifiedProperty"];
 

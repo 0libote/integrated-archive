@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   normalizeTag,
   sanitizeSettings,
+  sanitizeData,
   validateArchiveFolder,
   validateDateProperty,
   validatePropertyName,
@@ -32,6 +33,20 @@ test("sanitizes missing, malformed, and legacy settings", () => {
 
   assert.equal(sanitizeSettings({ promptOnDelete: false }).deleteAction, "delete");
   assert.equal(sanitizeSettings({ promptOnDelete: true }).deleteAction, "ask");
+});
+
+test("sanitizes archive history records", () => {
+  const data = sanitizeData({
+    archiveHistory: [
+      { archivedAt: 100, archivedPath: "Archive/note.md", originalPath: "note.md" },
+      { archivedAt: "invalid", archivedPath: "Archive/bad.md", originalPath: "bad.md" },
+      null,
+    ],
+  });
+
+  assert.deepEqual(data.archiveHistory, [
+    { archivedAt: 100, archivedPath: "Archive/note.md", originalPath: "note.md" },
+  ]);
 });
 
 test("keeps valid settings and normalizes a leading tag marker", () => {
