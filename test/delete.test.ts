@@ -124,7 +124,7 @@ test("remains correct when another wrapper is removed in either order", async ()
   const original = fixture.manager.promptForDeletion;
   const uninstallArchive = installDeletionInterceptor(fixture.manager, fixture.options);
   const uninstallOther = around(fixture.manager, {
-    promptForDeletion: (next) => async function (file) {
+    promptForDeletion: (next) => async function (this: DeletionManager<AbstractFile>, file: AbstractFile) {
       fixture.calls.push(`other:${file.path}`);
       return next.call(this, file);
     },
@@ -137,7 +137,7 @@ test("remains correct when another wrapper is removed in either order", async ()
   assert.equal(fixture.manager.promptForDeletion, original);
 
   const uninstallOtherFirst = around(fixture.manager, {
-    promptForDeletion: (next) => async function (file) {
+    promptForDeletion: (next) => async function (this: DeletionManager<AbstractFile>, file: AbstractFile) {
       fixture.calls.push(`other-first:${file.path}`);
       return next.call(this, file);
     },
