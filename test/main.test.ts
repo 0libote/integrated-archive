@@ -239,6 +239,7 @@ test("archives and restores through the plugin integration", async () => {
   const fixture = makeApp();
   const file = new MockFile("Projects/note.md");
   file.frontmatter = { created: "keep-me", tags: ["active"] };
+  const originalFrontmatter = structuredClone(file.frontmatter);
   fixture.setActive(file);
   plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
   await plugin.onload();
@@ -254,6 +255,7 @@ test("archives and restores through the plugin integration", async () => {
 
   expect(await plugin.restore(file as never)).toBe(true);
   expect(file.path).toBe("Projects/note.md");
+  expect(file.frontmatter).toEqual(originalFrontmatter);
   expect(plugin.settings.archiveHistory).toEqual([]);
   expect(notices).toContain("Archived to Archive/note.md");
   expect(notices).toContain("Restored to Projects/note.md");

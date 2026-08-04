@@ -101,16 +101,17 @@ test("archives a file and creates the destination folder", async () => {
   assert.deepEqual(result, {
     destination: "Archive/note.md",
     historyError: undefined,
+    metadataError: undefined,
     originalPath: "Projects/note.md",
   });
   assert.deepEqual(fixture.createdFolders, ["Archive"]);
   assert.deepEqual(fixture.renames, [{ from: "Projects/note.md", to: "Archive/note.md" }]);
   assert.equal(fixture.manager.isArchived(file), true);
-  assert.deepEqual(fixture.getHistory(), [{
-    archivedAt: 300,
-    archivedPath: "Archive/note.md",
-    originalPath: "Projects/note.md",
-  }]);
+  const [record] = fixture.getHistory();
+  assert.equal(record?.archivedAt, 300);
+  assert.equal(record?.archivedPath, "Archive/note.md");
+  assert.equal(record?.originalPath, "Projects/note.md");
+  assert.deepEqual(record?.metadata?.properties.map(({ key }) => key), ["tags", "archived", "created", "modified"]);
 });
 
 test("preserves the original folder structure when configured", async () => {
@@ -152,17 +153,27 @@ test("rejects an empty archive folder and a file blocking a parent folder", asyn
   assert.deepEqual(blocked.renames, []);
 });
 
-test("merges tags and writes all configured dates", async () => {
+test("keeps an existing archive tag unchanged and writes all configured dates", async () => {
   const fixture = makeFixture({ tag: "#archived", dateFormat: "FORMAT" });
   const file = makeFile();
-  file.frontmatter.tags = "existing, archived";
+  file.frontmatter.tags = "existing, #archived";
+
+  await fixture.manager.archive(file);
+
+  assert.equal(file.frontmatter.tags, "existing, #archived");
+  assert.equal(file.frontmatter.archived, "FORMAT:300");
+  assert.equal(file.frontmatter.created, "FORMAT:100");
+  assert.equal(file.frontmatter.modified, "FORMAT:200");
+});
+
+test("adds a missing archive tag without discarding existing tags", async () => {
+  const fixture = makeFixture({ tag: "#archived" });
+  const file = makeFile();
+  file.frontmatter.tags = ["existing"];
 
   await fixture.manager.archive(file);
 
   assert.deepEqual(file.frontmatter.tags, ["existing", "archived"]);
-  assert.equal(file.frontmatter.archived, "FORMAT:300");
-  assert.equal(file.frontmatter.created, "FORMAT:100");
-  assert.equal(file.frontmatter.modified, "FORMAT:200");
 });
 
 test("preserves existing created and modified dates by default", async () => {
@@ -231,6 +242,8 @@ test("records a history warning without undoing a successful archive", async () 
 test("restores an archived file to its exact original path", async () => {
   const fixture = makeFixture({ preserveFolders: false });
   const file = makeFile("Projects/Work/note.md");
+  file.frontmatter = { archived: "old", created: "original-created", tags: ["active"] };
+  const originalFrontmatter = structuredClone(file.frontmatter);
   await fixture.manager.archive(file);
 
   const result = await fixture.manager.restore(file);
@@ -239,8 +252,25 @@ test("restores an archived file to its exact original path", async () => {
     destination: "Projects/Work/note.md",
     historyError: undefined,
     inferredOriginalPath: false,
+    metadataError: undefined,
   });
   assert.equal(file.path, "Projects/Work/note.md");
+  assert.deepEqual(file.frontmatter, originalFrontmatter);
+  assert.deepEqual(fixture.getHistory(), []);
+});
+
+test("reports a metadata failure after preserving a successful restore", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  await fixture.manager.archive(file);
+  const error = new Error("Invalid YAML");
+  fixture.setMetadataError(error);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "Projects/note.md");
+  assert.equal(result.metadataError, error);
+  assert.equal(file.path, "Projects/note.md");
   assert.deepEqual(fixture.getHistory(), []);
 });
 
@@ -264,6 +294,7 @@ test("infers a legacy restore path when no history exists", async () => {
     destination: "Projects/note.md",
     historyError: undefined,
     inferredOriginalPath: true,
+    metadataError: undefined,
   });
 
   const flat = makeFixture({ preserveFolders: false });
@@ -301,4 +332,17 @@ test("recognizes recorded archive files after the archive folder setting changes
   fixture.setHistory([{ archivedAt: 100, archivedPath: file.path, originalPath: "note.md" }]);
 
   assert.equal(fixture.manager.isArchived(file), true);
+});
+
+test("serializes simultaneous archives without losing history", async () => {
+  const fixture = makeFixture();
+  const first = makeFile("Projects/first.md");
+  const second = makeFile("Projects/second.md");
+
+  await Promise.all([fixture.manager.archive(first), fixture.manager.archive(second)]);
+
+  assert.deepEqual(fixture.getHistory().map(({ archivedPath }) => archivedPath), [
+    "Archive/first.md",
+    "Archive/second.md",
+  ]);
 });

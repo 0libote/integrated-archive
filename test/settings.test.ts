@@ -19,6 +19,9 @@ test("sanitizes missing, malformed, and legacy settings", () => {
     preserveFolders: "yes",
     tag: "#",
     addTag: false,
+    archivedProperty: "__proto__",
+    createdProperty: "constructor",
+    modifiedProperty: "prototype",
     dateFormat: " ",
     deleteAction: "invalid",
     existingDateAction: "invalid",
@@ -30,6 +33,9 @@ test("sanitizes missing, malformed, and legacy settings", () => {
   assert.equal(malformed.dateFormat, "YYYY-MM-DD");
   assert.equal(malformed.deleteAction, "ask");
   assert.equal(malformed.existingDateAction, "preserve");
+  assert.equal(malformed.archivedProperty, "archived");
+  assert.equal(malformed.createdProperty, "created");
+  assert.equal(malformed.modifiedProperty, "modified");
 
   assert.equal(sanitizeSettings({ promptOnDelete: false }).deleteAction, "delete");
   assert.equal(sanitizeSettings({ promptOnDelete: true }).deleteAction, "ask");
@@ -38,14 +44,30 @@ test("sanitizes missing, malformed, and legacy settings", () => {
 test("sanitizes archive history records", () => {
   const data = sanitizeData({
     archiveHistory: [
-      { archivedAt: 100, archivedPath: "Archive/note.md", originalPath: "note.md" },
+      {
+        archivedAt: 100,
+        archivedPath: "Archive/note.md",
+        metadata: { properties: [{ existed: true, key: "tags", value: ["active"] }] },
+        originalPath: "note.md",
+      },
       { archivedAt: "invalid", archivedPath: "Archive/bad.md", originalPath: "bad.md" },
+      {
+        archivedAt: 200,
+        archivedPath: "Archive/unsafe.md",
+        metadata: { properties: [{ existed: false, key: "__proto__" }] },
+        originalPath: "unsafe.md",
+      },
       null,
     ],
   });
 
   assert.deepEqual(data.archiveHistory, [
-    { archivedAt: 100, archivedPath: "Archive/note.md", originalPath: "note.md" },
+    {
+      archivedAt: 100,
+      archivedPath: "Archive/note.md",
+      metadata: { properties: [{ existed: true, key: "tags", value: ["active"] }] },
+      originalPath: "note.md",
+    },
   ]);
 });
 
@@ -100,6 +122,9 @@ test("validates property names and prevents enabled date collisions", () => {
   assert.equal(validatePropertyName("created-at"), undefined);
   assert.match(validatePropertyName(" ") ?? "", /Enter/);
   assert.match(validatePropertyName("bad\nname") ?? "", /one line/);
+  assert.match(validatePropertyName("__proto__") ?? "", /different/);
+  assert.match(validatePropertyName("constructor") ?? "", /different/);
+  assert.match(validatePropertyName("prototype") ?? "", /different/);
   assert.equal(validateDateProperty(settings, "createdProperty", "created-at"), undefined);
   assert.match(validateDateProperty(settings, "createdProperty", "archived") ?? "", /unique/);
 

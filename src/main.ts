@@ -199,14 +199,7 @@ export default class IntegratedArchivePlugin extends Plugin {
   async restore(file: TFile): Promise<boolean> {
     try {
       const result = await this.archiveManager.restore(file);
-      if (result.historyError) {
-        console.error("Integrated Archive history:", result.historyError);
-        new Notice(`Restored to ${result.destination}, but archive history could not be updated.`);
-      } else if (result.inferredOriginalPath) {
-        new Notice(`Restored to ${result.destination}. The original location was inferred because no history was available.`);
-      } else {
-        new Notice(`Restored to ${result.destination}`);
-      }
+      this.reportRestoreResult(result);
       return true;
     } catch (error) {
       console.error("Integrated Archive restore:", error);
@@ -225,19 +218,15 @@ export default class IntegratedArchivePlugin extends Plugin {
   private async restoreMany(files: TFile[]): Promise<void> {
     const result = await runBatch(files, (file) => this.archiveManager.restore(file));
     for (const failure of result.failed) console.error(`Integrated Archive restore ${failure.item.path}:`, failure.error);
-    const warnings = result.succeeded.filter(({ result: item }) => item.historyError || item.inferredOriginalPath).length;
+    const warnings = result.succeeded.filter(({ result: item }) =>
+      item.historyError || item.metadataError || item.inferredOriginalPath).length;
     new Notice(this.batchNotice("Restored", result.succeeded.length, result.failed.length, warnings));
   }
 
   private async undoLastArchive(): Promise<void> {
     try {
       const result = await this.archiveManager.undoLastArchive();
-      if (result.historyError) {
-        console.error("Integrated Archive history:", result.historyError);
-        new Notice(`Restored to ${result.destination}, but archive history could not be updated.`);
-      } else {
-        new Notice(`Restored to ${result.destination}`);
-      }
+      this.reportRestoreResult(result);
     } catch (error) {
       console.error("Integrated Archive undo:", error);
       new Notice(`Could not undo archive: ${error instanceof Error ? error.message : String(error)}`);
@@ -266,6 +255,19 @@ export default class IntegratedArchivePlugin extends Plugin {
   private batchNotice(verb: string, succeeded: number, failed: number, warnings: number): string {
     const details = [failed && `${failed} failed`, warnings && `${warnings} completed with warnings`].filter(Boolean);
     return `${verb} ${succeeded} ${succeeded === 1 ? "file" : "files"}${details.length ? `; ${details.join("; ")}` : ""}.`;
+  }
+
+  private reportRestoreResult(result: Awaited<ReturnType<ArchiveManager<TFile>["restore"]>>): void {
+    if (result.metadataError) console.error("Integrated Archive metadata restore:", result.metadataError);
+    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
+    const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
+    if (failed) {
+      new Notice(`Restored to ${result.destination}, but ${failed} could not be updated.`);
+    } else if (result.inferredOriginalPath) {
+      new Notice(`Restored to ${result.destination}. The original location was inferred because no history was available.`);
+    } else {
+      new Notice(`Restored to ${result.destination}`);
+    }
   }
 
   private async reconcileExternalRename(file: TFile, oldPath: string): Promise<void> {

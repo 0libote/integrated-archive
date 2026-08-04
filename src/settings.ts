@@ -4,9 +4,20 @@ import { resolveDeleteAction } from "./path";
 export type ExistingDateAction = "preserve" | "overwrite";
 export type DatePropertyKey = "archivedProperty" | "createdProperty" | "modifiedProperty";
 
+export interface ArchivePropertySnapshot {
+  existed: boolean;
+  key: string;
+  value?: unknown;
+}
+
+export interface ArchiveMetadataSnapshot {
+  properties: ArchivePropertySnapshot[];
+}
+
 export interface ArchiveRecord {
   archivedAt: number;
   archivedPath: string;
+  metadata?: ArchiveMetadataSnapshot;
   originalPath: string;
 }
 
@@ -90,9 +101,9 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
 
   if (validateArchiveFolder(settings.archiveFolder)) settings.archiveFolder = DEFAULT_SETTINGS.archiveFolder;
   settings.tag = normalizeTag(settings.tag) ?? DEFAULT_SETTINGS.tag;
-  if (!settings.archivedProperty) settings.archivedProperty = DEFAULT_SETTINGS.archivedProperty;
-  if (!settings.createdProperty) settings.createdProperty = DEFAULT_SETTINGS.createdProperty;
-  if (!settings.modifiedProperty) settings.modifiedProperty = DEFAULT_SETTINGS.modifiedProperty;
+  if (validatePropertyName(settings.archivedProperty)) settings.archivedProperty = DEFAULT_SETTINGS.archivedProperty;
+  if (validatePropertyName(settings.createdProperty)) settings.createdProperty = DEFAULT_SETTINGS.createdProperty;
+  if (validatePropertyName(settings.modifiedProperty)) settings.modifiedProperty = DEFAULT_SETTINGS.modifiedProperty;
   if (!settings.dateFormat) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
   repairDuplicateDateProperties(settings);
 
@@ -130,8 +141,10 @@ export function validateTag(value: string): string | undefined {
 }
 
 export function validatePropertyName(value: string): string | undefined {
-  if (!value.trim()) return "Enter a property name.";
+  const property = value.trim();
+  if (!property) return "Enter a property name.";
   if (/\r|\n/.test(value)) return "Property names must fit on one line.";
+  if (RESERVED_PROPERTY_NAMES.has(property)) return "Choose a different property name.";
   return undefined;
 }
 
@@ -163,12 +176,23 @@ function isArchiveRecord(value: unknown): value is ArchiveRecord {
     && typeof value.archivedPath === "string"
     && !!value.archivedPath
     && typeof value.originalPath === "string"
-    && !!value.originalPath;
+    && !!value.originalPath
+    && (value.metadata === undefined || isMetadataSnapshot(value.metadata));
 }
 
 export const MAX_ARCHIVE_HISTORY = 200;
 
 const DATE_PROPERTY_KEYS: DatePropertyKey[] = ["archivedProperty", "createdProperty", "modifiedProperty"];
+const RESERVED_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
+
+function isMetadataSnapshot(value: unknown): value is ArchiveMetadataSnapshot {
+  return isRecord(value)
+    && Array.isArray(value.properties)
+    && value.properties.every((property) => isRecord(property)
+      && typeof property.key === "string"
+      && !validatePropertyName(property.key)
+      && typeof property.existed === "boolean");
+}
 
 function isDateEnabled(settings: ArchiveSettings, key: DatePropertyKey): boolean {
   if (key === "archivedProperty") return settings.addArchivedDate;

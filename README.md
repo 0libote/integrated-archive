@@ -24,7 +24,7 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Configure the folder, delete prompt, tag, property names, folder structure, and date format under **Settings → Integrated Archive**.
 
-Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last archive** restores the newest archived file that is still available.
+Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation, and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last archive** restores the newest archived file that is still available.
 
 The plugin works locally inside your vault. It has no network access, accounts, telemetry, or external services.
 

@@ -10,6 +10,7 @@ All notable changes to Integrated Archive are documented here.
 - Undo the most recent available archive operation.
 - Archive or restore multiple selected files from the file menu.
 - Collision-safe restores when the original path is occupied.
+- Reversal of metadata changes when a recorded archive operation is restored.
 - Inline validation for archive folders, tags, and metadata property names.
 - Automated version bumping and official Obsidian lint checks.
 
