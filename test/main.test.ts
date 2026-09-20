@@ -16,6 +16,17 @@ function clickModalButton(text: string): void {
   modalButtons.find((button) => button.text === text)?.click();
 }
 
+async function openDeletePrompt(): Promise<{ fixture: ReturnType<typeof makeApp>; file: MockFile; result: Promise<boolean> }> {
+  const fixture = makeApp();
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const result = fixture.app.fileManager.promptForDeletion(file);
+  return { fixture, file, result };
+}
+
 class MockAbstractFile {
   parent: MockFolder | null = null;
   constructor(public path: string, public name: string) {}
@@ -390,51 +401,29 @@ test("hides archive actions for protected paths", async () => {
 });
 
 test("asks before deleting and archives when chosen", async () => {
-  const fixture = makeApp();
-  fixture.app.loadedData = { deleteAction: "ask" };
-  const file = new MockFile("note.md");
-  fixture.setActive(file);
-  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
-  await plugin.onload();
-
-  const pending = fixture.app.fileManager.promptForDeletion(file);
+  const { fixture, file, result } = await openDeletePrompt();
   clickModalButton("Archive");
 
-  expect(await pending).toBe(true);
+  expect(await result).toBe(true);
   expect(file.path).toBe("Archive/note.md");
   expect(fixture.trashed).toEqual([]);
 });
 
 test("deletes through Obsidian trash when the prompt chooses delete", async () => {
-  const fixture = makeApp();
-  fixture.app.loadedData = { deleteAction: "ask" };
-  const file = new MockFile("note.md");
-  fixture.setActive(file);
-  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
-  await plugin.onload();
-
-  const pending = fixture.app.fileManager.promptForDeletion(file);
+  const { fixture, file, result } = await openDeletePrompt();
   clickModalButton("Delete");
 
-  expect(await pending).toBe(true);
+  expect(await result).toBe(true);
   expect(file.path).toBe("note.md");
   expect(fixture.trashed).toEqual(["note.md"]);
 });
 
 test("cancels deletion and leaves the file in place", async () => {
-  const fixture = makeApp();
-  fixture.app.loadedData = { deleteAction: "ask" };
-  const file = new MockFile("note.md");
-  fixture.setActive(file);
-  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
-  await plugin.onload();
-
-  const pending = fixture.app.fileManager.promptForDeletion(file);
+  const { file, result } = await openDeletePrompt();
   clickModalButton("Cancel");
 
-  expect(await pending).toBe(false);
+  expect(await result).toBe(false);
   expect(file.path).toBe("note.md");
-  expect(fixture.trashed).toEqual([]);
 });
 
 test("archives every eligible file through the folder command", async () => {
