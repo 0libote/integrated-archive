@@ -2,6 +2,12 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.3.1 — 2026-09-20
+
+### Security
+
+- Updated the transitive dev dependencies `fast-uri` (3.1.6) and `js-yaml` (4.3.2) to resolve published advisories.
+
 ## 0.3.0 — 2026-09-20
 
 ### Added
