@@ -19,7 +19,7 @@
   },
   "devDependencies": {
     "@types/bun": "^1.4.2",
-    "@types/node": "^22.15.17",
+    "@types/node": "^26.6.1",
     "esbuild": "^0.28.2",
     "eslint": "^9.39.4",
     "eslint-plugin-obsidianmd": "^0.4.2",
