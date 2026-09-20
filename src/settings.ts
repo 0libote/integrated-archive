@@ -201,9 +201,17 @@ export function validateDateFormat(value: string): string | undefined {
 
 export function parseExcludedPaths(value: string): string[] {
   return value
-    .split(/\r?\n/)
-    .map((line) => line.trim().replace(/^\/+|\/+$/g, ""))
+    .split("\n")
+    .map((line) => stripSlashes(line.trim()))
     .filter(Boolean);
+}
+
+function stripSlashes(value: string): string {
+  let start = 0;
+  let end = value.length;
+  while (start < end && value[start] === "/") start++;
+  while (end > start && value[end - 1] === "/") end--;
+  return value.slice(start, end);
 }
 
 export function sanitizeExcludedPaths(value: string): string {
