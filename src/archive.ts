@@ -2,6 +2,7 @@ import { addCollisionSuffix, isPathInFolder } from "./path";
 import {
   MAX_ARCHIVE_HISTORY,
   normalizeTag,
+  parseExcludedPaths,
   type ArchiveMetadataSnapshot,
   type ArchivePropertySnapshot,
   type ArchiveRecord,
@@ -26,6 +27,7 @@ export interface ArchiveHost<File extends ArchiveFile> {
   getArchiveHistory(): ArchiveRecord[];
   getEntryKind(path: string): VaultEntryKind | null;
   getFile(path: string): File | null;
+  getFrontmatter(file: File): Promise<Record<string, unknown> | undefined>;
   normalizePath(path: string): string;
   now(): number;
   processFrontMatter(file: File, update: (frontmatter: Record<string, unknown>) => void): Promise<void>;
@@ -56,9 +58,18 @@ export class ArchiveManager<File extends ArchiveFile> {
   ) {}
 
   isArchived(file: File): boolean {
+    return this.isArchivedPath(file.path);
+  }
+
+  isArchivedPath(path: string): boolean {
     const folder = this.archiveFolder();
-    return (!!folder && folder !== "." && isPathInFolder(file.path, folder))
-      || this.getHistory().some((record) => record.archivedPath === file.path);
+    return (!!folder && folder !== "." && isPathInFolder(path, folder))
+      || this.getHistory().some((record) => record.archivedPath === path);
+  }
+
+  isExcludedPath(path: string): boolean {
+    return parseExcludedPaths(this.getSettings().excludedPaths)
+      .some((excluded) => isPathInFolder(path, excluded));
   }
 
   archive(file: File): Promise<ArchiveResult> {
@@ -67,6 +78,10 @@ export class ArchiveManager<File extends ArchiveFile> {
 
   restore(file: File): Promise<RestoreResult> {
     return this.enqueue(() => this.restoreNow(file));
+  }
+
+  reconcileRename(oldPath: string, newPath: string): Promise<void> {
+    return this.enqueue(() => this.reconcileRenameNow(oldPath, newPath));
   }
 
   undoLastArchive(): Promise<RestoreResult> {
@@ -90,6 +105,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     const archiveFolder = this.archiveFolder();
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
     if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
+    if (this.isExcludedPath(file.path)) throw new Error(`${file.name} is in a protected location.`);
 
     const originalPath = file.path;
     const created = file.stat.ctime;
@@ -104,7 +120,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     let metadataError: unknown;
     let metadata: ArchiveMetadataSnapshot | undefined;
     try {
-      metadata = await this.addMetadata(file, created, modified, archivedAt);
+      metadata = await this.addMetadata(file, created, modified, archivedAt, originalPath);
     } catch (error) {
       metadataError = error;
     }
@@ -125,20 +141,14 @@ export class ArchiveManager<File extends ArchiveFile> {
     const history = this.getHistory();
     const recordIndex = this.findHistoryIndex(file.path, history);
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
-    const originalPath = record?.originalPath ?? this.inferOriginalPath(file);
+    const { inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
+
     const parent = originalPath.slice(0, originalPath.lastIndexOf("/"));
     await this.ensureFolder(parent);
     const destination = this.uniquePath(originalPath);
     await this.host.renameFile(file, destination);
 
-    let metadataError: unknown;
-    if (record?.metadata) {
-      try {
-        await this.restoreMetadata(file, record.metadata);
-      } catch (error) {
-        metadataError = error;
-      }
-    }
+    const metadataError = await this.revertMetadata(file, record, inferredProperty);
 
     let historyError: unknown;
     if (recordIndex >= 0) {
@@ -151,6 +161,79 @@ export class ArchiveManager<File extends ArchiveFile> {
     }
 
     return { destination, historyError, inferredOriginalPath: !record, metadataError };
+  }
+
+  private async resolveRestorePath(
+    file: File,
+    record: ArchiveRecord | undefined,
+  ): Promise<{ inferredProperty?: string; originalPath: string }> {
+    if (record?.originalPath) return { originalPath: record.originalPath };
+
+    const property = this.getSettings().originalPathProperty.trim();
+    const stored = property ? await this.readOriginalPathProperty(file, property) : undefined;
+    if (stored && this.isValidOriginalPath(stored)) return { inferredProperty: property, originalPath: stored };
+
+    return { originalPath: this.inferOriginalPath(file) };
+  }
+
+  private async revertMetadata(
+    file: File,
+    record: ArchiveRecord | undefined,
+    inferredProperty: string | undefined,
+  ): Promise<unknown> {
+    let metadataError: unknown;
+    if (record?.metadata) {
+      try {
+        await this.restoreMetadata(file, record.metadata);
+      } catch (error) {
+        metadataError = error;
+      }
+    }
+    if (inferredProperty) {
+      try {
+        await this.host.processFrontMatter(file, (frontmatter) => {
+          delete frontmatter[inferredProperty];
+        });
+      } catch (error) {
+        metadataError ??= error;
+      }
+    }
+    return metadataError;
+  }
+
+  private async readOriginalPathProperty(file: File, property: string): Promise<string | undefined> {
+    const frontmatter = await this.host.getFrontmatter(file);
+    const value = frontmatter?.[property];
+    return typeof value === "string" ? value : undefined;
+  }
+
+  private isValidOriginalPath(path: string): boolean {
+    const candidate = path.trim();
+    if (!candidate || candidate.startsWith("/") || candidate.includes("\\")) return false;
+    if (candidate.split("/").some((part) => !part || part === "." || part === "..")) return false;
+    const folder = this.archiveFolder();
+    return !folder || folder === "." || !isPathInFolder(candidate, folder);
+  }
+
+  private async reconcileRenameNow(oldPath: string, newPath: string): Promise<void> {
+    if (!oldPath || oldPath === newPath) return;
+    const folder = this.archiveFolder();
+    const staysArchived = !!folder && folder !== "." && isPathInFolder(newPath, folder);
+    const history = this.getHistory();
+    let changed = false;
+    const kept: ArchiveRecord[] = [];
+    for (const record of history) {
+      if (record.archivedPath === oldPath || isPathInFolder(record.archivedPath, oldPath)) {
+        changed = true;
+        if (staysArchived) {
+          const suffix = record.archivedPath.slice(oldPath.length);
+          kept.push({ ...record, archivedPath: `${newPath}${suffix}` });
+        }
+        continue;
+      }
+      kept.push(record);
+    }
+    if (changed) await this.host.saveArchiveHistory(kept);
   }
 
   private archiveFolder(): string {
@@ -179,10 +262,12 @@ export class ArchiveManager<File extends ArchiveFile> {
     created: number,
     modified: number,
     archivedAt: number,
+    originalPath: string,
   ): Promise<ArchiveMetadataSnapshot | undefined> {
     if (file.extension !== "md") return undefined;
     const settings = this.getSettings();
-    if (!settings.addTag && !settings.addArchivedDate && !settings.addCreatedDate && !settings.addModifiedDate) return undefined;
+    if (!settings.addTag && !settings.addArchivedDate && !settings.addCreatedDate
+      && !settings.addModifiedDate && !settings.storeOriginalPath) return undefined;
 
     const snapshot: ArchiveMetadataSnapshot = { properties: [] };
 
@@ -190,7 +275,7 @@ export class ArchiveManager<File extends ArchiveFile> {
       if (settings.addTag && settings.tag.trim()) {
         const tag = normalizeTag(settings.tag);
         const tags = this.readTags(frontmatter.tags);
-        if (tag && !tags.some((existing) => normalizeTag(existing) === tag)) {
+        if (tag && !tags.some((existing) => normalizeTag(existing)?.toLowerCase() === tag.toLowerCase())) {
           this.captureProperty(snapshot, frontmatter, "tags");
           frontmatter.tags = [...tags, tag];
         }
@@ -206,6 +291,11 @@ export class ArchiveManager<File extends ArchiveFile> {
       }
       if (settings.addModifiedDate && settings.modifiedProperty.trim()) {
         this.setHistoricalDate(snapshot, frontmatter, settings.modifiedProperty.trim(), format(modified));
+      }
+      if (settings.storeOriginalPath && settings.originalPathProperty.trim()) {
+        const property = settings.originalPathProperty.trim();
+        this.captureProperty(snapshot, frontmatter, property);
+        frontmatter[property] = originalPath;
       }
     });
     return snapshot.properties.length ? snapshot : undefined;

@@ -2,6 +2,28 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.3.0 — 2026-09-20
+
+### Added
+
+- Optionally store each note's original path in its frontmatter so it can be restored even when archive history is lost or synced from another device.
+- Archive every file in a folder from the file menu or the command palette, including nested files.
+- Protect vault-relative paths so they are never archived.
+
+### Changed
+
+- Reconcile archive history through the operation queue, removing a race with archive and restore writes.
+- Updated dependencies and pinned the Bun package manager to 1.4.2.
+
+### Fixed
+
+- Prevented a configured date property from overwriting the `tags` property.
+- Repaired duplicate property names that reused a default name, including collisions with the tag property.
+- Reconcile archive history when folders containing archived files are renamed or moved, and drop records whose files leave the archive.
+- Matched existing archive tags case-insensitively so they are not duplicated.
+- Added collision suffixes correctly for leading-dot files such as `.gitignore`.
+- Validated the date format setting.
+
 ## 0.2.0 — 2026-08-04
 
 ### Added
@@ -28,6 +50,9 @@ All notable changes to Integrated Archive are documented here.
 ## 0.1.2 — 2026-08-02
 
 - Adopted Obsidian 1.13's searchable settings API.
+
+## 0.1.1 — 2026-08-02
+
 - Added release attestations and addressed initial community review feedback.
 
 ## 0.1.0 — 2026-08-02

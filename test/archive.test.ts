@@ -46,6 +46,9 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
     getFile(path) {
       return files.get(path) ?? null;
     },
+    async getFrontmatter(file) {
+      return file.frontmatter;
+    },
     normalizePath(path) {
       return path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
     },
@@ -151,6 +154,17 @@ test("rejects an empty archive folder and a file blocking a parent folder", asyn
   blocked.entries.set("Storage", "file");
   await assert.rejects(() => blocked.manager.archive(makeFile()), /Storage is a file/);
   assert.deepEqual(blocked.renames, []);
+});
+
+test("refuses to archive protected paths", async () => {
+  const fixture = makeFixture({ excludedPaths: "Private\nTemplates" });
+
+  await assert.rejects(() => fixture.manager.archive(makeFile("Private/secret.md")), /protected/);
+  assert.deepEqual(fixture.renames, []);
+  assert.equal(fixture.manager.isExcludedPath("Templates/Daily/note.md"), true);
+  assert.equal(fixture.manager.isExcludedPath("Private/note.md"), true);
+  assert.equal(fixture.manager.isExcludedPath("Private2/note.md"), false);
+  assert.equal(fixture.manager.isExcludedPath("Projects/note.md"), false);
 });
 
 test("keeps an existing archive tag unchanged and writes all configured dates", async () => {
@@ -332,6 +346,101 @@ test("recognizes recorded archive files after the archive folder setting changes
   fixture.setHistory([{ archivedAt: 100, archivedPath: file.path, originalPath: "note.md" }]);
 
   assert.equal(fixture.manager.isArchived(file), true);
+});
+
+test("does not duplicate a tag that differs only in case", async () => {
+  const fixture = makeFixture({ tag: "Archived" });
+  const file = makeFile();
+  file.frontmatter.tags = ["archived"];
+
+  await fixture.manager.archive(file);
+
+  assert.deepEqual(file.frontmatter.tags, ["archived"]);
+});
+
+test("rewrites record paths when an archive folder is renamed", async () => {
+  const fixture = makeFixture({ preserveFolders: true });
+  await fixture.manager.archive(makeFile("Projects/Work/note.md"));
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/Projects/Work/note.md");
+
+  await fixture.manager.reconcileRename("Archive/Projects", "Archive/Stash");
+
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/Stash/Work/note.md");
+});
+
+test("drops records when a file leaves the archive without the plugin", async () => {
+  const fixture = makeFixture();
+  await fixture.manager.archive(makeFile("Projects/note.md"));
+  assert.equal(fixture.getHistory().length, 1);
+
+  await fixture.manager.reconcileRename("Archive/note.md", "Elsewhere/note.md");
+
+  assert.deepEqual(fixture.getHistory(), []);
+});
+
+test("keeps a record when a file is renamed inside the archive", async () => {
+  const fixture = makeFixture();
+  await fixture.manager.archive(makeFile("Projects/note.md"));
+
+  await fixture.manager.reconcileRename("Archive/note.md", "Archive/renamed.md");
+
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/renamed.md");
+  assert.equal(fixture.getHistory()[0]?.originalPath, "Projects/note.md");
+});
+
+test("reports when there is nothing to undo", async () => {
+  const fixture = makeFixture();
+
+  assert.equal(fixture.manager.canUndo(), false);
+  await assert.rejects(() => fixture.manager.undoLastArchive(), /no archived file/);
+});
+
+test("does not write a stored path for non-Markdown files", async () => {
+  const fixture = makeFixture({
+    addArchivedDate: false,
+    addCreatedDate: false,
+    addModifiedDate: false,
+    addTag: false,
+    storeOriginalPath: true,
+  });
+  const file = makeFile("Assets/image.png");
+
+  await fixture.manager.archive(file);
+
+  assert.deepEqual(file.frontmatter, {});
+});
+
+test("restores from a stored original path when history is gone", async () => {
+  const fixture = makeFixture({
+    addArchivedDate: false,
+    addCreatedDate: false,
+    addModifiedDate: false,
+    addTag: false,
+    storeOriginalPath: true,
+  });
+  const file = makeFile("Projects/Work/note.md");
+  await fixture.manager.archive(file);
+  assert.equal(file.frontmatter["archive-original-path"], "Projects/Work/note.md");
+
+  fixture.setHistory([]);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "Projects/Work/note.md");
+  assert.equal(result.inferredOriginalPath, true);
+  assert.equal(file.frontmatter["archive-original-path"], undefined);
+});
+
+test("ignores a stored original path that points back into the archive", async () => {
+  const fixture = makeFixture({ preserveFolders: false, storeOriginalPath: true });
+  const file = makeFile("Archive/legacy.md");
+  file.frontmatter["archive-original-path"] = "Archive/legacy.md";
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "legacy.md");
 });
 
 test("serializes simultaneous archives without losing history", async () => {

@@ -10,9 +10,30 @@ interface MockCommand {
 }
 
 const notices: string[] = [];
+const modalButtons: MockButton[] = [];
+
+function clickModalButton(text: string): void {
+  modalButtons.find((button) => button.text === text)?.click();
+}
+
+async function openDeletePrompt(): Promise<{ fixture: ReturnType<typeof makeApp>; file: MockFile; result: Promise<boolean> }> {
+  const fixture = makeApp();
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const result = fixture.app.fileManager.promptForDeletion(file);
+  return { fixture, file, result };
+}
 
 class MockAbstractFile {
+  parent: MockFolder | null = null;
   constructor(public path: string, public name: string) {}
+}
+
+class MockFolder extends MockAbstractFile {
+  children: MockAbstractFile[] = [];
 }
 
 class MockFile extends MockAbstractFile {
@@ -89,14 +110,23 @@ class MockModal {
 
 class MockSetting {
   addButton(callback: (button: MockButton) => void) {
-    callback(new MockButton());
+    const button = new MockButton();
+    callback(button);
+    modalButtons.push(button);
     return this;
   }
 }
 
 class MockButton {
-  onClick() { return this; }
-  setButtonText() { return this; }
+  text = "";
+  private callback: () => void = () => undefined;
+
+  click() {
+    this.callback();
+  }
+
+  onClick(callback: () => void) { this.callback = callback; return this; }
+  setButtonText(text: string) { this.text = text; return this; }
   setCta() { return this; }
   setDestructive() { return this; }
 }
@@ -115,6 +145,7 @@ mock.module("obsidian", () => ({
   SettingDefinitionItem: class {},
   TAbstractFile: MockAbstractFile,
   TFile: MockFile,
+  TFolder: MockFolder,
   moment: (timestamp: number) => ({ format: (pattern: string) => `${pattern}:${timestamp}` }),
   normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/"),
 }));
@@ -129,6 +160,9 @@ interface TestApp {
     trashFile(file: MockAbstractFile): Promise<void>;
   };
   loadedData: unknown;
+  metadataCache: {
+    getFileCache(file: MockFile): { frontmatter: Record<string, unknown> } | null;
+  };
   savedData: unknown;
   vault: {
     createFolder(path: string): Promise<void>;
@@ -150,6 +184,9 @@ function makeApp() {
   const app: TestApp = {
     loadedData: null,
     savedData: null,
+    metadataCache: {
+      getFileCache: (file) => ({ frontmatter: file.frontmatter }),
+    },
     fileManager: {
       async processFrontMatter(file, update) {
         update(file.frontmatter);
@@ -206,6 +243,7 @@ let plugin: InstanceType<typeof IntegratedArchivePlugin> | undefined;
 
 beforeEach(() => {
   notices.length = 0;
+  modalButtons.length = 0;
   mock.restore();
 });
 
@@ -229,6 +267,7 @@ test("loads sanitized settings and registers commands and menus", async () => {
     "archive-current-file",
     "restore-current-file",
     "undo-last-archive",
+    "archive-current-folder",
   ]);
   expect(fixture.events.has("workspace:file-menu")).toBe(true);
   expect(fixture.events.has("workspace:files-menu")).toBe(true);
@@ -299,6 +338,147 @@ test("adds the correct single-file and multi-file menu actions", async () => {
   const filesMenu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(multiTitles)) };
   fixture.events.get("workspace:files-menu")?.(filesMenu, [active, archived]);
   expect(multiTitles).toEqual(["Archive 1 file", "Restore 1 file"]);
+});
+
+test("offers to archive every file in a folder, including nested files", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Projects", "Projects");
+  const first = new MockFile("Projects/one.md");
+  const nested = new MockFolder("Projects/Sub", "Sub");
+  const deep = new MockFile("Projects/Sub/two.md");
+  const archived = new MockFile("Archive/three.md");
+  first.parent = folder;
+  nested.parent = folder;
+  deep.parent = nested;
+  folder.children = [first, nested];
+  nested.children = [deep];
+  fixture.entries.set(first.path, first);
+  fixture.entries.set(deep.path, deep);
+  fixture.entries.set(archived.path, archived);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, folder);
+
+  expect(titles).toEqual(["Archive 2 files"]);
+});
+
+test("does not offer folder archiving inside the archive", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Archive/Projects", "Projects");
+  const file = new MockFile("Archive/Projects/one.md");
+  file.parent = folder;
+  folder.children = [file];
+  fixture.entries.set(file.path, file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, folder);
+
+  expect(titles).toEqual([]);
+});
+
+test("hides archive actions for protected paths", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { excludedPaths: "Private" };
+  const file = new MockFile("Private/secret.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, file);
+  expect(titles).toEqual([]);
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-file");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(false);
+});
+
+test("asks before deleting and archives when chosen", async () => {
+  const { fixture, file, result } = await openDeletePrompt();
+  clickModalButton("Archive");
+
+  expect(await result).toBe(true);
+  expect(file.path).toBe("Archive/note.md");
+  expect(fixture.trashed).toEqual([]);
+});
+
+test("deletes through Obsidian trash when the prompt chooses delete", async () => {
+  const { fixture, file, result } = await openDeletePrompt();
+  clickModalButton("Delete");
+
+  expect(await result).toBe(true);
+  expect(file.path).toBe("note.md");
+  expect(fixture.trashed).toEqual(["note.md"]);
+});
+
+test("cancels deletion and leaves the file in place", async () => {
+  const { file, result } = await openDeletePrompt();
+  clickModalButton("Cancel");
+
+  expect(await result).toBe(false);
+  expect(file.path).toBe("note.md");
+});
+
+test("archives every eligible file through the folder command", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Projects", "Projects");
+  const first = new MockFile("Projects/one.md");
+  const second = new MockFile("Projects/two.md");
+  first.parent = folder;
+  second.parent = folder;
+  folder.children = [first, second];
+  fixture.entries.set(first.path, first);
+  fixture.entries.set(second.path, second);
+  fixture.setActive(first);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-folder");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(true);
+  check?.(false);
+  await Bun.sleep(10);
+
+  expect(first.path).toBe("Archive/one.md");
+  expect(second.path).toBe("Archive/two.md");
+  expect(notices).toContain("Archived 2 files.");
+});
+
+test("undoes the last archive through the command", async () => {
+  const fixture = makeApp();
+  const file = new MockFile("Projects/note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  await plugin.archive(file as never);
+  expect(file.path).toBe("Archive/note.md");
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "undo-last-archive");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(true);
+  check?.(false);
+  await Bun.sleep(10);
+
+  expect(file.path).toBe("Projects/note.md");
+});
+
+test("reloads settings when they change outside the plugin", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveFolder: "Archive" };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  fixture.app.loadedData = { archiveFolder: "Storage/Archive" };
+  await plugin.onExternalSettingsChange();
+
+  expect(plugin.settings.archiveFolder).toBe("Storage/Archive");
 });
 
 class MenuItem {

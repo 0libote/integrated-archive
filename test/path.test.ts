@@ -8,6 +8,11 @@ test("adds collision numbers before the extension", () => {
   assert.equal(addCollisionSuffix("Archive/folder.name/note", 1), "Archive/folder.name/note (1)");
 });
 
+test("treats leading-dot files as extensionless", () => {
+  assert.equal(addCollisionSuffix("Archive/.gitignore", 1), "Archive/.gitignore (1)");
+  assert.equal(addCollisionSuffix(".env", 1), ".env (1)");
+});
+
 test("only matches files inside the configured archive", () => {
   assert.equal(isPathInFolder("Archive/note.md", "Archive"), true);
   assert.equal(isPathInFolder("Archive 2/note.md", "Archive"), false);

@@ -28,6 +28,11 @@ export default defineConfig(
   ...obsidianmd.configs.recommended,
   {
     files: ["test/**/*.ts"],
+    languageOptions: {
+      globals: {
+        Bun: "readonly",
+      },
+    },
     rules: {
       "obsidianmd/no-nodejs-modules": "off",
       "@typescript-eslint/no-floating-promises": "off",
