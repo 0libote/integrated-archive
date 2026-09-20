@@ -39,6 +39,7 @@ export interface ArchiveSettings {
   existingDateAction: ExistingDateAction;
   storeOriginalPath: boolean;
   originalPathProperty: string;
+  excludedPaths: string;
 }
 
 export interface ArchiveData extends ArchiveSettings {
@@ -62,6 +63,7 @@ export const DEFAULT_SETTINGS: ArchiveSettings = {
   existingDateAction: "preserve",
   storeOriginalPath: false,
   originalPathProperty: "archive-original-path",
+  excludedPaths: "",
 };
 
 export const DEFAULT_DATA: ArchiveData = {
@@ -87,7 +89,10 @@ const STRING_KEYS = [
   "modifiedProperty",
   "dateFormat",
   "originalPathProperty",
+  "excludedPaths",
 ] as const;
+
+const PROPERTY_NAME_KEYS = ["archivedProperty", "createdProperty", "modifiedProperty", "originalPathProperty"] as const;
 
 export function sanitizeSettings(value: unknown): ArchiveSettings {
   const stored = isRecord(value) ? value : {};
@@ -105,17 +110,21 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
     typeof stored.promptOnDelete === "boolean" ? stored.promptOnDelete : undefined,
   );
   settings.existingDateAction = stored.existingDateAction === "overwrite" ? "overwrite" : "preserve";
+  settings.excludedPaths = sanitizeExcludedPaths(settings.excludedPaths);
 
-  if (validateArchiveFolder(settings.archiveFolder)) settings.archiveFolder = DEFAULT_SETTINGS.archiveFolder;
-  settings.tag = normalizeTag(settings.tag) ?? DEFAULT_SETTINGS.tag;
-  if (validatePropertyName(settings.archivedProperty)) settings.archivedProperty = DEFAULT_SETTINGS.archivedProperty;
-  if (validatePropertyName(settings.createdProperty)) settings.createdProperty = DEFAULT_SETTINGS.createdProperty;
-  if (validatePropertyName(settings.modifiedProperty)) settings.modifiedProperty = DEFAULT_SETTINGS.modifiedProperty;
-  if (validatePropertyName(settings.originalPathProperty)) settings.originalPathProperty = DEFAULT_SETTINGS.originalPathProperty;
-  if (validateDateFormat(settings.dateFormat)) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
-  repairPropertyCollisions(settings);
+  repairSettings(settings);
 
   return settings;
+}
+
+function repairSettings(settings: ArchiveSettings): void {
+  if (validateArchiveFolder(settings.archiveFolder)) settings.archiveFolder = DEFAULT_SETTINGS.archiveFolder;
+  settings.tag = normalizeTag(settings.tag) ?? DEFAULT_SETTINGS.tag;
+  for (const key of PROPERTY_NAME_KEYS) {
+    if (validatePropertyName(settings[key])) settings[key] = DEFAULT_SETTINGS[key];
+  }
+  if (validateDateFormat(settings.dateFormat)) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
+  repairPropertyCollisions(settings);
 }
 
 export function sanitizeData(value: unknown): ArchiveData {
@@ -187,6 +196,29 @@ export function validateDateFormat(value: string): string | undefined {
   if (!format) return "Enter a date format.";
   if (/[\r\n]/.test(value)) return "Date formats must fit on one line.";
   if (!/[A-Za-z]/.test(format)) return "Include a date token such as YYYY or MM.";
+  return undefined;
+}
+
+export function parseExcludedPaths(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^\/+|\/+$/g, ""))
+    .filter(Boolean);
+}
+
+export function sanitizeExcludedPaths(value: string): string {
+  return parseExcludedPaths(value)
+    .filter((path) => !path.split("/").some((part) => part === "." || part === ".."))
+    .join("\n");
+}
+
+export function validateExcludedPaths(value: string): string | undefined {
+  if (/\\/.test(value)) return "Use forward slashes.";
+  for (const path of parseExcludedPaths(value)) {
+    if (path.split("/").some((part) => part === "." || part === "..")) {
+      return "Use relative paths without . or .. segments.";
+    }
+  }
   return undefined;
 }
 

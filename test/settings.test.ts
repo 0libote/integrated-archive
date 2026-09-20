@@ -3,11 +3,14 @@ import test from "node:test";
 import {
   DEFAULT_SETTINGS,
   normalizeTag,
+  parseExcludedPaths,
+  sanitizeExcludedPaths,
   sanitizeSettings,
   sanitizeData,
   validateArchiveFolder,
   validateDateFormat,
   validateDateProperty,
+  validateExcludedPaths,
   validatePropertyName,
   validatePropertySlot,
   validateTag,
@@ -178,4 +181,21 @@ test("validates date formats", () => {
   assert.match(validateDateFormat("  ") ?? "", /Enter/);
   assert.match(validateDateFormat("---") ?? "", /token/);
   assert.match(validateDateFormat("YYYY\nMM") ?? "", /one line/);
+});
+
+test("parses, sanitizes, and validates protected paths", () => {
+  assert.deepEqual(parseExcludedPaths(" Private \n/Templates/\n\n"), ["Private", "Templates"]);
+  assert.deepEqual(parseExcludedPaths(""), []);
+  assert.equal(sanitizeExcludedPaths("Private\n../Secret\nTemplates"), "Private\nTemplates");
+  assert.equal(sanitizeExcludedPaths("Private\r\nTemplates"), "Private\nTemplates");
+  assert.equal(validateExcludedPaths("Private\nTemplates"), undefined);
+  assert.match(validateExcludedPaths("../Secret") ?? "", /segments/);
+  assert.match(validateExcludedPaths("a\\b") ?? "", /forward slashes/);
+});
+
+test("loads and normalizes protected paths from stored settings", () => {
+  const settings = sanitizeSettings({ excludedPaths: " Private \r\n\r\n Templates " });
+
+  assert.equal(settings.excludedPaths, "Private\nTemplates");
+  assert.equal(sanitizeSettings({}).excludedPaths, "");
 });

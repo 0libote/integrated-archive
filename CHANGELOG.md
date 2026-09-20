@@ -8,6 +8,7 @@ All notable changes to Integrated Archive are documented here.
 
 - Optionally store each note's original path in its frontmatter so it can be restored even when archive history is lost or synced from another device.
 - Archive every file in a folder from the file menu or the command palette, including nested files.
+- Protect vault-relative paths so they are never archived.
 
 ### Changed
 

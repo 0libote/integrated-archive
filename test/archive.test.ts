@@ -156,6 +156,17 @@ test("rejects an empty archive folder and a file blocking a parent folder", asyn
   assert.deepEqual(blocked.renames, []);
 });
 
+test("refuses to archive protected paths", async () => {
+  const fixture = makeFixture({ excludedPaths: "Private\nTemplates" });
+
+  await assert.rejects(() => fixture.manager.archive(makeFile("Private/secret.md")), /protected/);
+  assert.deepEqual(fixture.renames, []);
+  assert.equal(fixture.manager.isExcludedPath("Templates/Daily/note.md"), true);
+  assert.equal(fixture.manager.isExcludedPath("Private/note.md"), true);
+  assert.equal(fixture.manager.isExcludedPath("Private2/note.md"), false);
+  assert.equal(fixture.manager.isExcludedPath("Projects/note.md"), false);
+});
+
 test("keeps an existing archive tag unchanged and writes all configured dates", async () => {
   const fixture = makeFixture({ tag: "#archived", dateFormat: "FORMAT" });
   const file = makeFile();
@@ -365,6 +376,38 @@ test("drops records when a file leaves the archive without the plugin", async ()
   await fixture.manager.reconcileRename("Archive/note.md", "Elsewhere/note.md");
 
   assert.deepEqual(fixture.getHistory(), []);
+});
+
+test("keeps a record when a file is renamed inside the archive", async () => {
+  const fixture = makeFixture();
+  await fixture.manager.archive(makeFile("Projects/note.md"));
+
+  await fixture.manager.reconcileRename("Archive/note.md", "Archive/renamed.md");
+
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/renamed.md");
+  assert.equal(fixture.getHistory()[0]?.originalPath, "Projects/note.md");
+});
+
+test("reports when there is nothing to undo", async () => {
+  const fixture = makeFixture();
+
+  assert.equal(fixture.manager.canUndo(), false);
+  await assert.rejects(() => fixture.manager.undoLastArchive(), /no archived file/);
+});
+
+test("does not write a stored path for non-Markdown files", async () => {
+  const fixture = makeFixture({
+    addArchivedDate: false,
+    addCreatedDate: false,
+    addModifiedDate: false,
+    addTag: false,
+    storeOriginalPath: true,
+  });
+  const file = makeFile("Assets/image.png");
+
+  await fixture.manager.archive(file);
+
+  assert.deepEqual(file.frontmatter, {});
 });
 
 test("restores from a stored original path when history is gone", async () => {

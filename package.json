@@ -11,6 +11,7 @@
     "dev": "bun esbuild.config.mjs",
     "build": "tsc --noEmit && bun esbuild.config.mjs production",
     "test": "bun test",
+    "test:coverage": "bun test --coverage",
     "lint": "eslint .",
     "version:check": "bun scripts/version.mjs --check",
     "bump": "bun scripts/version.mjs",

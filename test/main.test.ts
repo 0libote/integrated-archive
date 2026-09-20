@@ -10,6 +10,11 @@ interface MockCommand {
 }
 
 const notices: string[] = [];
+const modalButtons: MockButton[] = [];
+
+function clickModalButton(text: string): void {
+  modalButtons.find((button) => button.text === text)?.click();
+}
 
 class MockAbstractFile {
   parent: MockFolder | null = null;
@@ -94,14 +99,23 @@ class MockModal {
 
 class MockSetting {
   addButton(callback: (button: MockButton) => void) {
-    callback(new MockButton());
+    const button = new MockButton();
+    callback(button);
+    modalButtons.push(button);
     return this;
   }
 }
 
 class MockButton {
-  onClick() { return this; }
-  setButtonText() { return this; }
+  text = "";
+  private callback: () => void = () => undefined;
+
+  click() {
+    this.callback();
+  }
+
+  onClick(callback: () => void) { this.callback = callback; return this; }
+  setButtonText(text: string) { this.text = text; return this; }
   setCta() { return this; }
   setDestructive() { return this; }
 }
@@ -218,6 +232,7 @@ let plugin: InstanceType<typeof IntegratedArchivePlugin> | undefined;
 
 beforeEach(() => {
   notices.length = 0;
+  modalButtons.length = 0;
   mock.restore();
 });
 
@@ -354,6 +369,127 @@ test("does not offer folder archiving inside the archive", async () => {
   fixture.events.get("workspace:file-menu")?.(menu, folder);
 
   expect(titles).toEqual([]);
+});
+
+test("hides archive actions for protected paths", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { excludedPaths: "Private" };
+  const file = new MockFile("Private/secret.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, file);
+  expect(titles).toEqual([]);
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-file");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(false);
+});
+
+test("asks before deleting and archives when chosen", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const pending = fixture.app.fileManager.promptForDeletion(file);
+  clickModalButton("Archive");
+
+  expect(await pending).toBe(true);
+  expect(file.path).toBe("Archive/note.md");
+  expect(fixture.trashed).toEqual([]);
+});
+
+test("deletes through Obsidian trash when the prompt chooses delete", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const pending = fixture.app.fileManager.promptForDeletion(file);
+  clickModalButton("Delete");
+
+  expect(await pending).toBe(true);
+  expect(file.path).toBe("note.md");
+  expect(fixture.trashed).toEqual(["note.md"]);
+});
+
+test("cancels deletion and leaves the file in place", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const pending = fixture.app.fileManager.promptForDeletion(file);
+  clickModalButton("Cancel");
+
+  expect(await pending).toBe(false);
+  expect(file.path).toBe("note.md");
+  expect(fixture.trashed).toEqual([]);
+});
+
+test("archives every eligible file through the folder command", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Projects", "Projects");
+  const first = new MockFile("Projects/one.md");
+  const second = new MockFile("Projects/two.md");
+  first.parent = folder;
+  second.parent = folder;
+  folder.children = [first, second];
+  fixture.entries.set(first.path, first);
+  fixture.entries.set(second.path, second);
+  fixture.setActive(first);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-folder");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(true);
+  check?.(false);
+  await Bun.sleep(10);
+
+  expect(first.path).toBe("Archive/one.md");
+  expect(second.path).toBe("Archive/two.md");
+  expect(notices).toContain("Archived 2 files.");
+});
+
+test("undoes the last archive through the command", async () => {
+  const fixture = makeApp();
+  const file = new MockFile("Projects/note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  await plugin.archive(file as never);
+  expect(file.path).toBe("Archive/note.md");
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "undo-last-archive");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(true);
+  check?.(false);
+  await Bun.sleep(10);
+
+  expect(file.path).toBe("Projects/note.md");
+});
+
+test("reloads settings when they change outside the plugin", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveFolder: "Archive" };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  fixture.app.loadedData = { archiveFolder: "Storage/Archive" };
+  await plugin.onExternalSettingsChange();
+
+  expect(plugin.settings.archiveFolder).toBe("Storage/Archive");
 });
 
 class MenuItem {

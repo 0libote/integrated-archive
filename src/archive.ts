@@ -2,6 +2,7 @@ import { addCollisionSuffix, isPathInFolder } from "./path";
 import {
   MAX_ARCHIVE_HISTORY,
   normalizeTag,
+  parseExcludedPaths,
   type ArchiveMetadataSnapshot,
   type ArchivePropertySnapshot,
   type ArchiveRecord,
@@ -66,6 +67,11 @@ export class ArchiveManager<File extends ArchiveFile> {
       || this.getHistory().some((record) => record.archivedPath === path);
   }
 
+  isExcludedPath(path: string): boolean {
+    return parseExcludedPaths(this.getSettings().excludedPaths)
+      .some((excluded) => isPathInFolder(path, excluded));
+  }
+
   archive(file: File): Promise<ArchiveResult> {
     return this.enqueue(() => this.archiveNow(file));
   }
@@ -99,6 +105,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     const archiveFolder = this.archiveFolder();
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
     if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
+    if (this.isExcludedPath(file.path)) throw new Error(`${file.name} is in a protected location.`);
 
     const originalPath = file.path;
     const created = file.stat.ctime;
@@ -134,42 +141,14 @@ export class ArchiveManager<File extends ArchiveFile> {
     const history = this.getHistory();
     const recordIndex = this.findHistoryIndex(file.path, history);
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
-
-    let inferredProperty: string | undefined;
-    let originalPath = record?.originalPath;
-    if (!originalPath) {
-      const property = this.getSettings().originalPathProperty.trim();
-      const stored = property ? await this.readOriginalPathProperty(file, property) : undefined;
-      if (stored && this.isValidOriginalPath(stored)) {
-        originalPath = stored;
-        inferredProperty = property;
-      }
-    }
-    originalPath ??= this.inferOriginalPath(file);
+    const { inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
 
     const parent = originalPath.slice(0, originalPath.lastIndexOf("/"));
     await this.ensureFolder(parent);
     const destination = this.uniquePath(originalPath);
     await this.host.renameFile(file, destination);
 
-    let metadataError: unknown;
-    if (record?.metadata) {
-      try {
-        await this.restoreMetadata(file, record.metadata);
-      } catch (error) {
-        metadataError = error;
-      }
-    }
-    if (inferredProperty) {
-      const propertyToRemove = inferredProperty;
-      try {
-        await this.host.processFrontMatter(file, (frontmatter) => {
-          delete frontmatter[propertyToRemove];
-        });
-      } catch (error) {
-        metadataError ??= error;
-      }
-    }
+    const metadataError = await this.revertMetadata(file, record, inferredProperty);
 
     let historyError: unknown;
     if (recordIndex >= 0) {
@@ -182,6 +161,44 @@ export class ArchiveManager<File extends ArchiveFile> {
     }
 
     return { destination, historyError, inferredOriginalPath: !record, metadataError };
+  }
+
+  private async resolveRestorePath(
+    file: File,
+    record: ArchiveRecord | undefined,
+  ): Promise<{ inferredProperty?: string; originalPath: string }> {
+    if (record?.originalPath) return { originalPath: record.originalPath };
+
+    const property = this.getSettings().originalPathProperty.trim();
+    const stored = property ? await this.readOriginalPathProperty(file, property) : undefined;
+    if (stored && this.isValidOriginalPath(stored)) return { inferredProperty: property, originalPath: stored };
+
+    return { originalPath: this.inferOriginalPath(file) };
+  }
+
+  private async revertMetadata(
+    file: File,
+    record: ArchiveRecord | undefined,
+    inferredProperty: string | undefined,
+  ): Promise<unknown> {
+    let metadataError: unknown;
+    if (record?.metadata) {
+      try {
+        await this.restoreMetadata(file, record.metadata);
+      } catch (error) {
+        metadataError = error;
+      }
+    }
+    if (inferredProperty) {
+      try {
+        await this.host.processFrontMatter(file, (frontmatter) => {
+          delete frontmatter[inferredProperty];
+        });
+      } catch (error) {
+        metadataError ??= error;
+      }
+    }
+    return metadataError;
   }
 
   private async readOriginalPathProperty(file: File, property: string): Promise<string | undefined> {

@@ -22,6 +22,7 @@ import {
   type ArchiveSettings,
   validateArchiveFolder,
   validateDateFormat,
+  validateExcludedPaths,
   validatePropertySlot,
   validateTag,
 } from "./settings";
@@ -97,7 +98,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       name: "Archive current file",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || this.isArchived(file)) return false;
+        if (!file || this.isArchived(file) || this.archiveManager.isExcludedPath(file.path)) return false;
         if (!checking) void this.archive(file);
         return true;
       },
@@ -157,7 +158,7 @@ export default class IntegratedArchivePlugin extends Plugin {
           .setIcon("undo-2")
           .setSection("action")
           .onClick(() => void this.restore(file)));
-      } else {
+      } else if (!this.archiveManager.isExcludedPath(file.path)) {
         menu.addItem((item) => item
           .setTitle("Archive")
           .setIcon("archive")
@@ -269,7 +270,7 @@ export default class IntegratedArchivePlugin extends Plugin {
     const walk = (current: TFolder): void => {
       for (const child of current.children) {
         if (child instanceof TFile) {
-          if (!this.isArchived(child)) files.push(child);
+          if (!this.isArchived(child) && !this.archiveManager.isExcludedPath(child.path)) files.push(child);
         } else if (child instanceof TFolder) {
           walk(child);
         }
@@ -344,6 +345,11 @@ class ArchiveSettingTab extends PluginSettingTab {
             control: { type: "dropdown", key: "deleteAction", options: { ask: "Ask every time", archive: "Archive automatically", delete: "Delete normally" } },
           },
           { name: "Show archive in file menus", desc: "Add Archive directly below Delete in file context menus.", control: { type: "toggle", key: "showArchiveMenu" } },
+          {
+            name: "Protected paths",
+            desc: "One vault-relative path per line. Files and folders here are never archived.",
+            control: { type: "textarea", key: "excludedPaths", placeholder: "Private\nTemplates", rows: 4, validate: validateExcludedPaths },
+          },
         ],
       },
       {
