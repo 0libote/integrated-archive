@@ -11,20 +11,23 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 - **Archive current file** command and optional file-menu action.
 - Restore archived files to their original locations, or undo the latest available archive operation.
-- Archive or restore multiple selected files at once.
+- Archive or restore multiple selected files at once, or archive every file in a folder.
 - Choose whether Delete asks each time, archives automatically, or uses Obsidian’s normal delete flow.
 - The optional prompt offers **Archive / Delete / Cancel**. Delete follows your configured Obsidian trash setting and may be permanent.
 - Configurable archive folder with optional original folder structure.
 - Optional archive tag and archived, created, and last-edited frontmatter dates.
+- Optionally write the original path into archived notes so they can be restored even when archive history is lost or synced to another device.
 - Collision-safe names such as `note (1).md`; existing files are never overwritten.
 - Files already inside the archive use Obsidian's normal delete flow.
 - Existing created and last-edited properties are preserved by default.
 
 ## Use
 
-Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Configure the folder, delete prompt, tag, property names, folder structure, and date format under **Settings → Integrated Archive**.
+Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, and date format under **Settings → Integrated Archive**.
 
 Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation, and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last archive** restores the newest archived file that is still available.
+
+Enable **Store original path in notes** under the Restore settings to write each note's original location into its frontmatter. Restores fall back to this value when archive history is unavailable, for example after syncing the vault to another device.
 
 The plugin works locally inside your vault. It has no network access, accounts, telemetry, or external services.
 

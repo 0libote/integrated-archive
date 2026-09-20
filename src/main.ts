@@ -8,6 +8,7 @@ import {
   SettingDefinitionItem,
   TAbstractFile,
   TFile,
+  TFolder,
   moment,
   normalizePath,
 } from "obsidian";
@@ -20,7 +21,8 @@ import {
   type ArchiveData,
   type ArchiveSettings,
   validateArchiveFolder,
-  validateDateProperty,
+  validateDateFormat,
+  validatePropertySlot,
   validateTag,
 } from "./settings";
 
@@ -59,7 +61,6 @@ class ArchiveDeleteModal extends Modal {
 export default class IntegratedArchivePlugin extends Plugin {
   settings: ArchiveData = DEFAULT_DATA;
   private archiveManager!: ArchiveManager<TFile>;
-  private readonly managedRenames = new Set<string>();
   private settingTab!: ArchiveSettingTab;
 
   async onload(): Promise<void> {
@@ -77,18 +78,11 @@ export default class IntegratedArchivePlugin extends Plugin {
         const entry = this.app.vault.getAbstractFileByPath(path);
         return entry instanceof TFile ? entry : null;
       },
+      getFrontmatter: (file) => Promise.resolve(this.app.metadataCache.getFileCache(file)?.frontmatter),
       normalizePath,
       now: Date.now,
       processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
-      renameFile: async (file, destination) => {
-        const originalPath = file.path;
-        this.managedRenames.add(originalPath);
-        try {
-          await this.app.fileManager.renameFile(file, destination);
-        } finally {
-          this.managedRenames.delete(originalPath);
-        }
-      },
+      renameFile: (file, destination) => this.app.fileManager.renameFile(file, destination),
       saveArchiveHistory: async (records) => {
         this.settings.archiveHistory = records;
         await this.saveData(this.settings);
@@ -130,8 +124,33 @@ export default class IntegratedArchivePlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "archive-current-folder",
+      name: "Archive all files in current folder",
+      checkCallback: (checking) => {
+        const folder = this.activeFolder();
+        if (!folder) return false;
+        const files = this.collectArchivableFiles(folder);
+        if (!files.length) return false;
+        if (!checking) void this.archiveMany(files);
+        return true;
+      },
+    });
+
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
-      if (!this.settings.showArchiveMenu || !(file instanceof TFile)) return;
+      if (!this.settings.showArchiveMenu) return;
+      if (file instanceof TFolder) {
+        if (this.archiveManager.isArchivedPath(file.path)) return;
+        const files = this.collectArchivableFiles(file);
+        if (!files.length) return;
+        menu.addItem((item) => item
+          .setTitle(`Archive ${files.length} ${files.length === 1 ? "file" : "files"}`)
+          .setIcon("archive")
+          .setSection("danger")
+          .onClick(() => void this.archiveMany(files)));
+        return;
+      }
+      if (!(file instanceof TFile)) return;
       if (this.isArchived(file)) {
         menu.addItem((item) => item
           .setTitle("Restore from archive")
@@ -168,7 +187,7 @@ export default class IntegratedArchivePlugin extends Plugin {
     }));
 
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      if (file instanceof TFile && !this.managedRenames.has(oldPath)) void this.reconcileExternalRename(file, oldPath);
+      void this.archiveManager.reconcileRename(oldPath, file.path);
     }));
 
     this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
@@ -238,6 +257,28 @@ export default class IntegratedArchivePlugin extends Plugin {
     return this.archiveManager.isArchived(file);
   }
 
+  private activeFolder(): TFolder | null {
+    const file = this.app.workspace.getActiveFile();
+    const folder = file?.parent ?? null;
+    if (!folder || this.archiveManager.isArchivedPath(folder.path)) return null;
+    return folder;
+  }
+
+  private collectArchivableFiles(folder: TFolder): TFile[] {
+    const files: TFile[] = [];
+    const walk = (current: TFolder): void => {
+      for (const child of current.children) {
+        if (child instanceof TFile) {
+          if (!this.isArchived(child)) files.push(child);
+        } else if (child instanceof TFolder) {
+          walk(child);
+        }
+      }
+    };
+    walk(folder);
+    return files;
+  }
+
   private async loadSettings(): Promise<void> {
     this.settings = sanitizeData(await this.loadData());
   }
@@ -270,25 +311,6 @@ export default class IntegratedArchivePlugin extends Plugin {
       new Notice(`Restored to ${result.destination}. The original location was inferred because no history was available.`);
     } else {
       new Notice(`Restored to ${result.destination}`);
-    }
-  }
-
-  private async reconcileExternalRename(file: TFile, oldPath: string): Promise<void> {
-    const records = [...this.settings.archiveHistory];
-    const index = records.findIndex((record) => record.archivedPath === oldPath);
-    if (index < 0) return;
-
-    if (this.isArchived(file)) {
-      const record = records[index];
-      if (record) records[index] = { ...record, archivedPath: file.path };
-    } else {
-      records.splice(index, 1);
-    }
-    try {
-      this.settings.archiveHistory = records;
-      await this.saveData(this.settings);
-    } catch (error) {
-      console.error("Integrated Archive history reconciliation:", error);
     }
   }
 }
@@ -340,21 +362,21 @@ class ArchiveSettingTab extends PluginSettingTab {
             name: "Archived date property",
             desc: "Frontmatter property name.",
             visible: () => s.addArchivedDate,
-            control: { type: "text", key: "archivedProperty", validate: (value) => validateDateProperty(s, "archivedProperty", value) },
+            control: { type: "text", key: "archivedProperty", validate: (value) => validatePropertySlot(s, "archivedProperty", value) },
           },
           { name: "Add created date", desc: "Record the file system creation day.", control: { type: "toggle", key: "addCreatedDate" } },
           {
             name: "Created date property",
             desc: "Frontmatter property name.",
             visible: () => s.addCreatedDate,
-            control: { type: "text", key: "createdProperty", validate: (value) => validateDateProperty(s, "createdProperty", value) },
+            control: { type: "text", key: "createdProperty", validate: (value) => validatePropertySlot(s, "createdProperty", value) },
           },
           { name: "Add last edited date", desc: "Record the modification day from before archiving.", control: { type: "toggle", key: "addModifiedDate" } },
           {
             name: "Last edited property",
             desc: "Frontmatter property name.",
             visible: () => s.addModifiedDate,
-            control: { type: "text", key: "modifiedProperty", validate: (value) => validateDateProperty(s, "modifiedProperty", value) },
+            control: { type: "text", key: "modifiedProperty", validate: (value) => validatePropertySlot(s, "modifiedProperty", value) },
           },
           {
             name: "Existing created and edited dates",
@@ -366,7 +388,24 @@ class ArchiveSettingTab extends PluginSettingTab {
             name: "Date format",
             desc: "Moment format, for example YYYY-MM-DD or DD/MM/YYYY.",
             visible: () => s.addArchivedDate || s.addCreatedDate || s.addModifiedDate,
-            control: { type: "text", key: "dateFormat" },
+            control: { type: "text", key: "dateFormat", validate: validateDateFormat },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Restore",
+        items: [
+          {
+            name: "Store original path in notes",
+            desc: "Write the original location into archived Markdown notes so they can return home even if archive history is lost or synced to another device.",
+            control: { type: "toggle", key: "storeOriginalPath" },
+          },
+          {
+            name: "Original path property",
+            desc: "Frontmatter property name.",
+            visible: () => s.storeOriginalPath,
+            control: { type: "text", key: "originalPathProperty", validate: (value) => validatePropertySlot(s, "originalPathProperty", value) },
           },
         ],
       },

@@ -2,7 +2,8 @@ export function addCollisionSuffix(path: string, number: number): string {
   if (number === 0) return path;
   const slash = path.lastIndexOf("/");
   const dot = path.lastIndexOf(".");
-  const split = dot > slash ? dot : path.length;
+  const hasExtension = dot > slash + 1;
+  const split = hasExtension ? dot : path.length;
   return `${path.slice(0, split)} (${number})${path.slice(split)}`;
 }
 

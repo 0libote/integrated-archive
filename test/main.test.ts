@@ -12,7 +12,12 @@ interface MockCommand {
 const notices: string[] = [];
 
 class MockAbstractFile {
+  parent: MockFolder | null = null;
   constructor(public path: string, public name: string) {}
+}
+
+class MockFolder extends MockAbstractFile {
+  children: MockAbstractFile[] = [];
 }
 
 class MockFile extends MockAbstractFile {
@@ -115,6 +120,7 @@ mock.module("obsidian", () => ({
   SettingDefinitionItem: class {},
   TAbstractFile: MockAbstractFile,
   TFile: MockFile,
+  TFolder: MockFolder,
   moment: (timestamp: number) => ({ format: (pattern: string) => `${pattern}:${timestamp}` }),
   normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/"),
 }));
@@ -129,6 +135,9 @@ interface TestApp {
     trashFile(file: MockAbstractFile): Promise<void>;
   };
   loadedData: unknown;
+  metadataCache: {
+    getFileCache(file: MockFile): { frontmatter: Record<string, unknown> } | null;
+  };
   savedData: unknown;
   vault: {
     createFolder(path: string): Promise<void>;
@@ -150,6 +159,9 @@ function makeApp() {
   const app: TestApp = {
     loadedData: null,
     savedData: null,
+    metadataCache: {
+      getFileCache: (file) => ({ frontmatter: file.frontmatter }),
+    },
     fileManager: {
       async processFrontMatter(file, update) {
         update(file.frontmatter);
@@ -229,6 +241,7 @@ test("loads sanitized settings and registers commands and menus", async () => {
     "archive-current-file",
     "restore-current-file",
     "undo-last-archive",
+    "archive-current-folder",
   ]);
   expect(fixture.events.has("workspace:file-menu")).toBe(true);
   expect(fixture.events.has("workspace:files-menu")).toBe(true);
@@ -299,6 +312,48 @@ test("adds the correct single-file and multi-file menu actions", async () => {
   const filesMenu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(multiTitles)) };
   fixture.events.get("workspace:files-menu")?.(filesMenu, [active, archived]);
   expect(multiTitles).toEqual(["Archive 1 file", "Restore 1 file"]);
+});
+
+test("offers to archive every file in a folder, including nested files", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Projects", "Projects");
+  const first = new MockFile("Projects/one.md");
+  const nested = new MockFolder("Projects/Sub", "Sub");
+  const deep = new MockFile("Projects/Sub/two.md");
+  const archived = new MockFile("Archive/three.md");
+  first.parent = folder;
+  nested.parent = folder;
+  deep.parent = nested;
+  folder.children = [first, nested];
+  nested.children = [deep];
+  fixture.entries.set(first.path, first);
+  fixture.entries.set(deep.path, deep);
+  fixture.entries.set(archived.path, archived);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, folder);
+
+  expect(titles).toEqual(["Archive 2 files"]);
+});
+
+test("does not offer folder archiving inside the archive", async () => {
+  const fixture = makeApp();
+  const folder = new MockFolder("Archive/Projects", "Projects");
+  const file = new MockFile("Archive/Projects/one.md");
+  file.parent = folder;
+  folder.children = [file];
+  fixture.entries.set(file.path, file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, folder);
+
+  expect(titles).toEqual([]);
 });
 
 class MenuItem {

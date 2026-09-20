@@ -3,6 +3,7 @@ import { resolveDeleteAction } from "./path";
 
 export type ExistingDateAction = "preserve" | "overwrite";
 export type DatePropertyKey = "archivedProperty" | "createdProperty" | "modifiedProperty";
+export type PropertySlotKey = DatePropertyKey | "originalPathProperty";
 
 export interface ArchivePropertySnapshot {
   existed: boolean;
@@ -36,6 +37,8 @@ export interface ArchiveSettings {
   modifiedProperty: string;
   dateFormat: string;
   existingDateAction: ExistingDateAction;
+  storeOriginalPath: boolean;
+  originalPathProperty: string;
 }
 
 export interface ArchiveData extends ArchiveSettings {
@@ -57,6 +60,8 @@ export const DEFAULT_SETTINGS: ArchiveSettings = {
   modifiedProperty: "modified",
   dateFormat: "YYYY-MM-DD",
   existingDateAction: "preserve",
+  storeOriginalPath: false,
+  originalPathProperty: "archive-original-path",
 };
 
 export const DEFAULT_DATA: ArchiveData = {
@@ -71,6 +76,7 @@ const BOOLEAN_KEYS = [
   "addArchivedDate",
   "addCreatedDate",
   "addModifiedDate",
+  "storeOriginalPath",
 ] as const;
 
 const STRING_KEYS = [
@@ -80,6 +86,7 @@ const STRING_KEYS = [
   "createdProperty",
   "modifiedProperty",
   "dateFormat",
+  "originalPathProperty",
 ] as const;
 
 export function sanitizeSettings(value: unknown): ArchiveSettings {
@@ -104,8 +111,9 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
   if (validatePropertyName(settings.archivedProperty)) settings.archivedProperty = DEFAULT_SETTINGS.archivedProperty;
   if (validatePropertyName(settings.createdProperty)) settings.createdProperty = DEFAULT_SETTINGS.createdProperty;
   if (validatePropertyName(settings.modifiedProperty)) settings.modifiedProperty = DEFAULT_SETTINGS.modifiedProperty;
-  if (!settings.dateFormat) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
-  repairDuplicateDateProperties(settings);
+  if (validatePropertyName(settings.originalPathProperty)) settings.originalPathProperty = DEFAULT_SETTINGS.originalPathProperty;
+  if (validateDateFormat(settings.dateFormat)) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
+  repairPropertyCollisions(settings);
 
   return settings;
 }
@@ -148,20 +156,37 @@ export function validatePropertyName(value: string): string | undefined {
   return undefined;
 }
 
-export function validateDateProperty(
+export function validatePropertySlot(
   settings: ArchiveSettings,
-  key: DatePropertyKey,
+  key: PropertySlotKey,
   value: string,
 ): string | undefined {
   const invalidName = validatePropertyName(value);
   if (invalidName) return invalidName;
 
   const candidate = value.trim();
-  for (const otherKey of DATE_PROPERTY_KEYS) {
-    if (otherKey !== key && isDateEnabled(settings, otherKey) && settings[otherKey].trim() === candidate) {
-      return "Use a unique name for each enabled date property.";
+  if (settings.addTag && candidate === "tags") return "Choose a different property name.";
+  for (const otherKey of PROPERTY_SLOT_KEYS) {
+    if (otherKey !== key && isSlotEnabled(settings, otherKey) && settings[otherKey].trim() === candidate) {
+      return "Use a unique name for each enabled property.";
     }
   }
+  return undefined;
+}
+
+export function validateDateProperty(
+  settings: ArchiveSettings,
+  key: DatePropertyKey,
+  value: string,
+): string | undefined {
+  return validatePropertySlot(settings, key, value);
+}
+
+export function validateDateFormat(value: string): string | undefined {
+  const format = value.trim();
+  if (!format) return "Enter a date format.";
+  if (/[\r\n]/.test(value)) return "Date formats must fit on one line.";
+  if (!/[A-Za-z]/.test(format)) return "Include a date token such as YYYY or MM.";
   return undefined;
 }
 
@@ -183,6 +208,7 @@ function isArchiveRecord(value: unknown): value is ArchiveRecord {
 export const MAX_ARCHIVE_HISTORY = 200;
 
 const DATE_PROPERTY_KEYS: DatePropertyKey[] = ["archivedProperty", "createdProperty", "modifiedProperty"];
+const PROPERTY_SLOT_KEYS: PropertySlotKey[] = [...DATE_PROPERTY_KEYS, "originalPathProperty"];
 const RESERVED_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
 function isMetadataSnapshot(value: unknown): value is ArchiveMetadataSnapshot {
@@ -194,18 +220,25 @@ function isMetadataSnapshot(value: unknown): value is ArchiveMetadataSnapshot {
       && typeof property.existed === "boolean");
 }
 
-function isDateEnabled(settings: ArchiveSettings, key: DatePropertyKey): boolean {
+function isSlotEnabled(settings: ArchiveSettings, key: PropertySlotKey): boolean {
   if (key === "archivedProperty") return settings.addArchivedDate;
   if (key === "createdProperty") return settings.addCreatedDate;
-  return settings.addModifiedDate;
+  if (key === "modifiedProperty") return settings.addModifiedDate;
+  return settings.storeOriginalPath;
 }
 
-function repairDuplicateDateProperties(settings: ArchiveSettings): void {
+function repairPropertyCollisions(settings: ArchiveSettings): void {
   const used = new Set<string>();
-  for (const key of DATE_PROPERTY_KEYS) {
-    if (!isDateEnabled(settings, key)) continue;
-    const property = settings[key];
-    if (used.has(property)) settings[key] = DEFAULT_SETTINGS[key];
-    used.add(settings[key]);
+  if (settings.addTag) used.add("tags");
+  for (const key of PROPERTY_SLOT_KEYS) {
+    if (!isSlotEnabled(settings, key)) continue;
+    let property = settings[key];
+    if (used.has(property)) {
+      property = DEFAULT_SETTINGS[key];
+      let suffix = 2;
+      while (used.has(property)) property = `${DEFAULT_SETTINGS[key]}-${suffix++}`;
+      settings[key] = property;
+    }
+    used.add(property);
   }
 }

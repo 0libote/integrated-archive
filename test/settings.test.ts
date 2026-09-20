@@ -6,8 +6,10 @@ import {
   sanitizeSettings,
   sanitizeData,
   validateArchiveFolder,
+  validateDateFormat,
   validateDateProperty,
   validatePropertyName,
+  validatePropertySlot,
   validateTag,
 } from "../src/settings.ts";
 
@@ -99,6 +101,35 @@ test("repairs duplicate enabled date properties loaded from disk", () => {
   assert.equal(settings.modifiedProperty, "modified");
 });
 
+test("resolves collisions with default property names", () => {
+  const settings = sanitizeSettings({
+    archivedProperty: "created",
+    createdProperty: "created",
+  });
+
+  assert.equal(settings.archivedProperty, "created");
+  assert.notEqual(settings.createdProperty, settings.archivedProperty);
+});
+
+test("keeps every enabled property name distinct including the stored path", () => {
+  const settings = sanitizeSettings({
+    archivedProperty: "modified",
+    createdProperty: "modified",
+    modifiedProperty: "modified",
+    storeOriginalPath: true,
+    originalPathProperty: "modified",
+  });
+
+  const names = [settings.archivedProperty, settings.createdProperty, settings.modifiedProperty, settings.originalPathProperty];
+  assert.equal(new Set(names).size, names.length);
+});
+
+test("repairs a date property that collides with the tag property", () => {
+  const settings = sanitizeSettings({ archivedProperty: "tags" });
+
+  assert.notEqual(settings.archivedProperty, "tags");
+});
+
 test("validates archive folders", () => {
   assert.equal(validateArchiveFolder("Archive"), undefined);
   assert.equal(validateArchiveFolder("Storage/Archive"), undefined);
@@ -130,4 +161,21 @@ test("validates property names and prevents enabled date collisions", () => {
 
   settings.addArchivedDate = false;
   assert.equal(validateDateProperty(settings, "createdProperty", "archived"), undefined);
+});
+
+test("rejects property names that collide with the tag property or stored path", () => {
+  const settings = { ...DEFAULT_SETTINGS, addTag: true, addArchivedDate: false };
+  assert.match(validatePropertySlot(settings, "createdProperty", "tags") ?? "", /different/);
+
+  settings.storeOriginalPath = true;
+  assert.equal(validatePropertySlot(settings, "createdProperty", "created"), undefined);
+  assert.match(validatePropertySlot(settings, "createdProperty", "archive-original-path") ?? "", /unique/);
+});
+
+test("validates date formats", () => {
+  assert.equal(validateDateFormat("YYYY-MM-DD"), undefined);
+  assert.equal(validateDateFormat("[Archived] YYYY"), undefined);
+  assert.match(validateDateFormat("  ") ?? "", /Enter/);
+  assert.match(validateDateFormat("---") ?? "", /token/);
+  assert.match(validateDateFormat("YYYY\nMM") ?? "", /one line/);
 });
