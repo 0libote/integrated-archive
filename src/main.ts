@@ -22,6 +22,7 @@ import {
   type ArchiveSettings,
   validateArchiveFolder,
   validateDateFormat,
+  validateExcludedOverlap,
   validateExcludedPaths,
   validatePropertySlot,
   validateTag,
@@ -55,6 +56,44 @@ class ArchiveDeleteModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
     this.resolve?.("cancel");
+    this.resolve = undefined;
+  }
+}
+
+export const BULK_CONFIRM_THRESHOLD = 10;
+
+export function needsBulkConfirm(count: number, threshold = BULK_CONFIRM_THRESHOLD): boolean {
+  return count > threshold;
+}
+
+class ConfirmBulkModal extends Modal {
+  private resolve?: (confirmed: boolean) => void;
+
+  constructor(app: App, private readonly title: string, private readonly message: string) {
+    super(app);
+  }
+
+  choose(): Promise<boolean> {
+    this.setTitle(this.title);
+    this.contentEl.createEl("p", { text: this.message });
+    new Setting(this.contentEl)
+      .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish(false)))
+      .addButton((button) => button.setButtonText("Continue").setCta().onClick(() => this.finish(true)));
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+      this.open();
+    });
+  }
+
+  private finish(confirmed: boolean): void {
+    this.resolve?.(confirmed);
+    this.resolve = undefined;
+    this.close();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    this.resolve?.(false);
     this.resolve = undefined;
   }
 }
@@ -117,7 +156,7 @@ export default class IntegratedArchivePlugin extends Plugin {
 
     this.addCommand({
       id: "undo-last-archive",
-      name: "Undo last archive",
+      name: "Undo last file archive",
       checkCallback: (checking) => {
         if (!this.archiveManager.canUndo()) return false;
         if (!checking) void this.undoLastArchive();
@@ -230,6 +269,16 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   private async archiveMany(files: TFile[]): Promise<void> {
+    if (!files.length) return;
+    if (needsBulkConfirm(files.length)) {
+      const noun = files.length === 1 ? "file" : "files";
+      const confirmed = await new ConfirmBulkModal(
+        this.app,
+        `Archive ${files.length} ${noun}?`,
+        `This will archive ${files.length} ${noun}. Continue?`,
+      ).choose();
+      if (!confirmed) return;
+    }
     const result = await runBatch(files, (file) => this.archiveManager.archive(file));
     for (const failure of result.failed) console.error(`Integrated Archive ${failure.item.path}:`, failure.error);
     const warnings = result.succeeded.filter(({ result: item }) => item.metadataError || item.historyError).length;
@@ -237,6 +286,16 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   private async restoreMany(files: TFile[]): Promise<void> {
+    if (!files.length) return;
+    if (needsBulkConfirm(files.length)) {
+      const noun = files.length === 1 ? "file" : "files";
+      const confirmed = await new ConfirmBulkModal(
+        this.app,
+        `Restore ${files.length} ${noun}?`,
+        `This will restore ${files.length} ${noun} to their original locations. Continue?`,
+      ).choose();
+      if (!confirmed) return;
+    }
     const result = await runBatch(files, (file) => this.archiveManager.restore(file));
     for (const failure of result.failed) console.error(`Integrated Archive restore ${failure.item.path}:`, failure.error);
     const warnings = result.succeeded.filter(({ result: item }) =>
@@ -262,6 +321,9 @@ export default class IntegratedArchivePlugin extends Plugin {
     const file = this.app.workspace.getActiveFile();
     const folder = file?.parent ?? null;
     if (!folder || this.archiveManager.isArchivedPath(folder.path)) return null;
+    // Guard the vault root: archiving "current folder" at the root would
+    // archive the entire vault. The command stays hidden there instead.
+    if (folder.path === "" || folder.path === "/" || folder.isRoot?.()) return null;
     return folder;
   }
 
@@ -341,14 +403,14 @@ class ArchiveSettingTab extends PluginSettingTab {
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           {
             name: "When deleting",
-            desc: "Choose what happens to files outside the archive. Archived files always use Obsidian’s normal delete flow.",
+            desc: "Choose what happens to files outside the archive. Folders and archived files always use Obsidian’s normal delete flow.",
             control: { type: "dropdown", key: "deleteAction", options: { ask: "Ask every time", archive: "Archive automatically", delete: "Delete normally" } },
           },
           { name: "Show archive in file menus", desc: "Add Archive directly below Delete in file context menus.", control: { type: "toggle", key: "showArchiveMenu" } },
           {
             name: "Protected paths",
-            desc: "One vault-relative path per line. Files and folders here are never archived.",
-            control: { type: "textarea", key: "excludedPaths", placeholder: "Private\nTemplates", rows: 4, validate: validateExcludedPaths },
+            desc: "One vault-relative path per line. Files and folders here are never archived, and restores into these paths are blocked.",
+            control: { type: "textarea", key: "excludedPaths", placeholder: "Private\nTemplates", rows: 4, validate: (value) => validateExcludedPaths(value) ?? validateExcludedOverlap(s.archiveFolder, value) },
           },
         ],
       },

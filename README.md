@@ -26,11 +26,15 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, and date format under **Settings → Integrated Archive**.
 
-Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation, and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last archive** restores the newest archived file that is still available.
+Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation, and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one file at a time: archiving N files takes N undos.
 
-Enable **Store original path in notes** under the Restore settings to write each note's original location into its frontmatter. Restores fall back to this value when archive history is unavailable, for example after syncing the vault to another device.
+Enable **Store original path in notes** under the Restore settings to write each note's original location into its frontmatter. Restores fall back to this value when archive history is unavailable, for example after syncing the vault to another device. Only Markdown notes store this property; images, PDFs, and other files rely on archive history.
 
-Add vault-relative paths under **Protected paths** to keep files or folders out of the archive. Archive actions are hidden for protected files, and batch commands skip them.
+Add vault-relative paths under **Protected paths** to keep files or folders out of the archive. Archive actions are hidden for protected files, and batch commands skip them. Restores into protected paths are blocked, and the archive folder itself cannot sit inside a protected path.
+
+Archiving more than 10 files at once asks for confirmation. **Archive all files in current folder** is hidden at the vault root so it cannot archive the whole vault, and folder deletes always use Obsidian's normal delete flow (the archive-on-delete setting applies to files only).
+
+Archive history keeps the newest 200 records; older restores are evicted first.
 
 The plugin works locally inside your vault. It has no network access, accounts, telemetry, or external services.
 

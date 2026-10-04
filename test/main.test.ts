@@ -150,7 +150,7 @@ mock.module("obsidian", () => ({
   normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/"),
 }));
 
-const { default: IntegratedArchivePlugin } = await import("../src/main.ts");
+const { default: IntegratedArchivePlugin, BULK_CONFIRM_THRESHOLD, needsBulkConfirm } = await import("../src/main.ts");
 
 interface TestApp {
   fileManager: {
@@ -479,6 +479,30 @@ test("reloads settings when they change outside the plugin", async () => {
   await plugin.onExternalSettingsChange();
 
   expect(plugin.settings.archiveFolder).toBe("Storage/Archive");
+});
+
+test("requires confirmation for large batches", () => {
+  expect(BULK_CONFIRM_THRESHOLD).toBe(10);
+  expect(needsBulkConfirm(10)).toBe(false);
+  expect(needsBulkConfirm(11)).toBe(true);
+  expect(needsBulkConfirm(1)).toBe(false);
+});
+
+test("hides the folder command at the vault root", async () => {
+  const fixture = makeApp();
+  const root = new MockFolder("", "");
+  (root as unknown as { isRoot: () => boolean }).isRoot = () => true;
+  const file = new MockFile("note.md");
+  file.parent = root;
+  root.children = [file];
+  fixture.entries.set(file.path, file);
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-folder");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(false);
 });
 
 class MenuItem {

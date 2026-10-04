@@ -523,3 +523,37 @@ test("restores a pristine copy of object-valued properties", async () => {
 
   assert.deepEqual(file.frontmatter.created, { nested: 1 });
 });
+
+test("blocks restoring into a protected location", async () => {
+  const fixture = makeFixture({ excludedPaths: "Private" });
+  const file = makeFile("Projects/note.md");
+  await fixture.manager.archive(file);
+  assert.equal(file.path, "Archive/note.md");
+
+  // Simulate the original location becoming protected after archiving.
+  fixture.settings.excludedPaths = "Private\nProjects";
+
+  await assert.rejects(() => fixture.manager.restore(file), /protected location/);
+});
+
+test("ignores a stored original path inside a protected location", async () => {
+  const fixture = makeFixture({
+    excludedPaths: "Private",
+    originalPathProperty: "archive-original-path",
+    storeOriginalPath: true,
+  });
+  const file = makeFile("Archive/legacy.md");
+  file.frontmatter["archive-original-path"] = "Private/secret.md";
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "legacy.md");
+});
+
+test("refuses to archive when the archive folder is protected", async () => {
+  const fixture = makeFixture({ archiveFolder: "Private/Archive", excludedPaths: "Private" });
+
+  await assert.rejects(() => fixture.manager.archive(makeFile("Projects/note.md")), /protected location/);
+});

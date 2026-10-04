@@ -115,6 +115,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     const wantedPath = this.host.normalizePath(`${archiveFolder}/${relativePath}`);
     await this.ensureFolder(wantedPath.slice(0, wantedPath.lastIndexOf("/")));
     const destination = this.uniquePath(wantedPath);
+    if (this.isExcludedPath(destination)) {
+      throw new Error(`Cannot archive ${file.name}: the archive folder is inside a protected location.`);
+    }
     await this.host.renameFile(file, destination);
 
     let metadataError: unknown;
@@ -143,6 +146,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
     const { inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
 
+    if (this.isExcludedPath(originalPath)) {
+      throw new Error(`Cannot restore ${file.name}: ${originalPath} is in a protected location.`);
+    }
     const parent = parentFolder(originalPath);
     await this.ensureFolder(parent);
     const destination = this.uniquePath(originalPath);
@@ -212,7 +218,10 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (!candidate || candidate.startsWith("/") || candidate.includes("\\")) return false;
     if (candidate.split("/").some((part) => !part || part === "." || part === "..")) return false;
     const folder = this.archiveFolder();
-    return !folder || folder === "." || !isPathInFolder(candidate, folder);
+    if (folder && folder !== "." && isPathInFolder(candidate, folder)) return false;
+    // Never restore into a protected location; fall back to inference instead.
+    if (this.isExcludedPath(candidate)) return false;
+    return true;
   }
 
   private async reconcileRenameNow(oldPath: string, newPath: string): Promise<void> {

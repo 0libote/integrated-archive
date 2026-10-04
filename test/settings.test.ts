@@ -10,6 +10,7 @@ import {
   validateArchiveFolder,
   validateDateFormat,
   validateDateProperty,
+  validateExcludedOverlap,
   validateExcludedPaths,
   validatePropertyName,
   validatePropertySlot,
@@ -192,6 +193,14 @@ test("parses, sanitizes, and validates protected paths", () => {
   assert.equal(validateExcludedPaths("Private\nTemplates"), undefined);
   assert.match(validateExcludedPaths("../Secret") ?? "", /segments/);
   assert.match(validateExcludedPaths("a\\b") ?? "", /forward slashes/);
+});
+
+test("rejects protected paths overlapping the archive folder", () => {
+  assert.equal(validateExcludedOverlap("Archive", "Private\nTemplates"), undefined);
+  assert.match(validateExcludedOverlap("Archive", "Archive") ?? "", /overlap/i);
+  assert.match(validateExcludedOverlap("Archive", "Archive/Projects") ?? "", /overlap/i);
+  assert.match(validateExcludedOverlap("Storage/Archive", "Storage") ?? "", /overlap/i);
+  assert.equal(validateExcludedOverlap(".", "Archive"), undefined);
 });
 
 test("loads and normalizes protected paths from stored settings", () => {

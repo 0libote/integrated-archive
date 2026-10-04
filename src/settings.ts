@@ -1,5 +1,5 @@
 import type { DeleteAction } from "./path";
-import { resolveDeleteAction } from "./path";
+import { isPathInFolder, resolveDeleteAction } from "./path";
 
 export type ExistingDateAction = "preserve" | "overwrite";
 export type DatePropertyKey = "archivedProperty" | "createdProperty" | "modifiedProperty";
@@ -225,6 +225,17 @@ export function validateExcludedPaths(value: string): string | undefined {
   for (const path of parseExcludedPaths(value)) {
     if (path.split("/").some((part) => part === "." || part === "..")) {
       return "Use relative paths without . or .. segments.";
+    }
+  }
+  return undefined;
+}
+
+export function validateExcludedOverlap(archiveFolder: string, value: string): string | undefined {
+  const folder = archiveFolder.trim().replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+  if (!folder || folder === ".") return undefined;
+  for (const path of parseExcludedPaths(value)) {
+    if (path === folder || isPathInFolder(path, folder) || isPathInFolder(folder, path)) {
+      return "Protected paths overlap the archive folder.";
     }
   }
   return undefined;
