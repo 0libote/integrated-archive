@@ -466,7 +466,7 @@ class ArchiveSettingTab extends PluginSettingTab {
         items: [
           {
             name: "Store original path in notes",
-            desc: "Write the original location into archived Markdown notes so they can return home even if archive history is lost or synced to another device.",
+            desc: "Write the original location into archived Markdown notes so they can return home even if archive history is lost or synced to another device. Other file types rely on archive history (newest 200 records).",
             control: { type: "toggle", key: "storeOriginalPath" },
           },
           {

@@ -303,13 +303,15 @@ test("archives and restores through the plugin integration", async () => {
 test("routes delete actions through archive mode and restores the original method on cleanup", async () => {
   const fixture = makeApp();
   const originalPrompt = fixture.app.fileManager.promptForDeletion;
+  const originalTrash = fixture.app.fileManager.trashFile;
   const file = new MockFile("note.md");
   fixture.setActive(file);
   fixture.app.loadedData = { deleteAction: "archive" };
   plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
   await plugin.onload();
 
-  expect(await fixture.app.fileManager.promptForDeletion(file)).toBe(true);
+  // Consumes the delete (false) so two-step callers skip their own trashFile.
+  expect(await fixture.app.fileManager.promptForDeletion(file)).toBe(false);
   expect(file.path).toBe("Archive/note.md");
   expect(fixture.trashed).toEqual([]);
 
@@ -317,6 +319,21 @@ test("routes delete actions through archive mode and restores the original metho
   for (const cleanup of pluginState.cleanups.reverse()) cleanup();
   pluginState.cleanups = [];
   expect(fixture.app.fileManager.promptForDeletion).toBe(originalPrompt);
+  expect(fixture.app.fileManager.trashFile).toBe(originalTrash);
+});
+
+test("redirects direct trashFile calls to the archive in archive mode", async () => {
+  const fixture = makeApp();
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  fixture.app.loadedData = { deleteAction: "archive" };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  await fixture.app.fileManager.trashFile(file);
+
+  expect(file.path).toBe("Archive/note.md");
+  expect(fixture.trashed).toEqual([]);
 });
 
 test("adds the correct single-file and multi-file menu actions", async () => {
@@ -404,7 +421,8 @@ test("asks before deleting and archives when chosen", async () => {
   const { fixture, file, result } = await openDeletePrompt();
   clickModalButton("Archive");
 
-  expect(await result).toBe(true);
+  // Archive consumes the delete so the caller does not trash afterwards.
+  expect(await result).toBe(false);
   expect(file.path).toBe("Archive/note.md");
   expect(fixture.trashed).toEqual([]);
 });
@@ -413,7 +431,8 @@ test("deletes through Obsidian trash when the prompt chooses delete", async () =
   const { fixture, file, result } = await openDeletePrompt();
   clickModalButton("Delete");
 
-  expect(await result).toBe(true);
+  // Trashed once inside the prompt; false prevents a second trash by the caller.
+  expect(await result).toBe(false);
   expect(file.path).toBe("note.md");
   expect(fixture.trashed).toEqual(["note.md"]);
 });
