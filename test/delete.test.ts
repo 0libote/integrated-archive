@@ -78,9 +78,25 @@ test("automatically archives instead of invoking the original deletion", async (
   fixture.setAction("archive");
   const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
 
+  // Consumes the delete: returns false so two-step callers
+  // (`if (await prompt) await trash`) skip their own trashFile.
   const confirmed = await fixture.manager.promptForDeletion(new File("Projects/note.md"));
 
-  assert.equal(confirmed, true);
+  assert.equal(confirmed, false);
+  assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
+  uninstall();
+});
+
+test("archives without a follow-up trash in the two-step caller flow", async () => {
+  const fixture = makeFixture();
+  fixture.setAction("archive");
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+  const file = new File("Projects/note.md");
+
+  if (await fixture.manager.promptForDeletion(file)) {
+    await fixture.manager.trashFile(file);
+  }
+
   assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
   uninstall();
 });
@@ -90,9 +106,9 @@ test("handles archive, delete, and cancel choices", async () => {
   const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
 
   fixture.setChoice("archive");
-  assert.equal(await fixture.manager.promptForDeletion(new File("one.md")), true);
+  assert.equal(await fixture.manager.promptForDeletion(new File("one.md")), false);
   fixture.setChoice("delete");
-  assert.equal(await fixture.manager.promptForDeletion(new File("two.md")), true);
+  assert.equal(await fixture.manager.promptForDeletion(new File("two.md")), false);
   fixture.setChoice("cancel");
   assert.equal(await fixture.manager.promptForDeletion(new File("three.md")), false);
 
@@ -102,6 +118,52 @@ test("handles archive, delete, and cancel choices", async () => {
     "choose:two.md",
     "trash:two.md",
     "choose:three.md",
+  ]);
+  uninstall();
+});
+
+test("trashes exactly once in the two-step caller flow", async () => {
+  const fixture = makeFixture();
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+  fixture.setChoice("delete");
+  const file = new File("two.md");
+
+  if (await fixture.manager.promptForDeletion(file)) {
+    await fixture.manager.trashFile(file);
+  }
+
+  // promptForDeletion already trashed and returned false, so the caller
+  // skips its own trashFile: exactly one trash total, no double-trash.
+  assert.deepEqual(fixture.calls, ["choose:two.md", "trash:two.md"]);
+  uninstall();
+});
+
+test("redirects direct trashFile calls to the archive in archive mode", async () => {
+  const fixture = makeFixture();
+  fixture.setAction("archive");
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+
+  await fixture.manager.trashFile(new File("Projects/note.md"));
+
+  assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
+  uninstall();
+});
+
+test("passes direct trashFile calls through unless archiving automatically", async () => {
+  const fixture = makeFixture();
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+
+  // ask mode: programmatic trashFile passes through (void API cannot prompt).
+  await fixture.manager.trashFile(new File("Projects/note.md"));
+  // folders and archived files always pass through, even in archive mode.
+  fixture.setAction("archive");
+  await fixture.manager.trashFile(new Folder("Projects"));
+  await fixture.manager.trashFile(new File("Archive/note.md"));
+
+  assert.deepEqual(fixture.calls, [
+    "trash:Projects/note.md",
+    "trash:Projects",
+    "trash:Archive/note.md",
   ]);
   uninstall();
 });

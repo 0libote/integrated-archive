@@ -455,3 +455,105 @@ test("serializes simultaneous archives without losing history", async () => {
     "Archive/second.md",
   ]);
 });
+
+test("restores a root-level file without creating a spurious folder", async () => {
+  const fixture = makeFixture();
+  const file = makeFile("note.md");
+  await fixture.manager.archive(file);
+  assert.equal(file.path, "Archive/note.md");
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "note.md");
+  assert.equal(file.path, "note.md");
+  assert.ok(!fixture.createdFolders.includes("note.m"));
+});
+
+test("keeps history when the archive folder itself is renamed", async () => {
+  const fixture = makeFixture();
+  await fixture.manager.archive(makeFile("Projects/note.md"));
+
+  await fixture.manager.reconcileRename("Archive", "Storage/Archive");
+
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Storage/Archive/note.md");
+});
+
+test("keeps history when an ancestor of the archive folder is renamed", async () => {
+  const fixture = makeFixture({ archiveFolder: "Storage/Archive" });
+  await fixture.manager.archive(makeFile("Projects/note.md"));
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Storage/Archive/note.md");
+
+  await fixture.manager.reconcileRename("Storage", "Vault/Storage");
+
+  assert.equal(fixture.getHistory()[0]?.archivedPath, "Vault/Storage/Archive/note.md");
+});
+
+test("infers nested legacy paths even when folder structure is not preserved", async () => {
+  const fixture = makeFixture({ preserveFolders: false });
+  const file = makeFile("Archive/Projects/note.md");
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "Projects/note.md");
+});
+
+test("normalizes existing tag markers when adding the archive tag", async () => {
+  const fixture = makeFixture({ tag: "archived" });
+  const file = makeFile();
+  file.frontmatter.tags = ["#existing"];
+
+  await fixture.manager.archive(file);
+
+  assert.deepEqual(file.frontmatter.tags, ["existing", "archived"]);
+});
+
+test("restores a pristine copy of object-valued properties", async () => {
+  const fixture = makeFixture({ existingDateAction: "overwrite" });
+  const file = makeFile();
+  const original: Record<string, unknown> = { nested: 1 };
+  file.frontmatter = { created: original };
+
+  await fixture.manager.archive(file);
+  assert.equal(typeof file.frontmatter.created, "string");
+
+  original.nested = 999;
+  await fixture.manager.restore(file);
+
+  assert.deepEqual(file.frontmatter.created, { nested: 1 });
+});
+
+test("blocks restoring into a protected location", async () => {
+  const fixture = makeFixture({ excludedPaths: "Private" });
+  const file = makeFile("Projects/note.md");
+  await fixture.manager.archive(file);
+  assert.equal(file.path, "Archive/note.md");
+
+  // Simulate the original location becoming protected after archiving.
+  fixture.settings.excludedPaths = "Private\nProjects";
+
+  await assert.rejects(() => fixture.manager.restore(file), /protected location/);
+});
+
+test("ignores a stored original path inside a protected location", async () => {
+  const fixture = makeFixture({
+    excludedPaths: "Private",
+    originalPathProperty: "archive-original-path",
+    storeOriginalPath: true,
+  });
+  const file = makeFile("Archive/legacy.md");
+  file.frontmatter["archive-original-path"] = "Private/secret.md";
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+
+  const result = await fixture.manager.restore(file);
+
+  assert.equal(result.destination, "legacy.md");
+});
+
+test("refuses to archive when the archive folder is protected", async () => {
+  const fixture = makeFixture({ archiveFolder: "Private/Archive", excludedPaths: "Private" });
+
+  await assert.rejects(() => fixture.manager.archive(makeFile("Projects/note.md")), /protected location/);
+});

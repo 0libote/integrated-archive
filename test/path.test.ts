@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addCollisionSuffix, isPathInFolder, resolveDeleteAction } from "../src/path.ts";
+import { addCollisionSuffix, isPathInFolder, parentFolder, resolveDeleteAction } from "../src/path.ts";
 
 test("adds collision numbers before the extension", () => {
   assert.equal(addCollisionSuffix("Archive/note.md", 0), "Archive/note.md");
@@ -22,4 +22,10 @@ test("migrates the old delete prompt setting", () => {
   assert.equal(resolveDeleteAction(undefined, true), "ask");
   assert.equal(resolveDeleteAction(undefined, false), "delete");
   assert.equal(resolveDeleteAction("archive"), "archive");
+});
+
+test("returns the parent folder without mangling root-level files", () => {
+  assert.equal(parentFolder("note.md"), "");
+  assert.equal(parentFolder("Projects/note.md"), "Projects");
+  assert.equal(parentFolder("Projects/Work/note.md"), "Projects/Work");
 });

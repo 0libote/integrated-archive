@@ -1,4 +1,4 @@
-import { addCollisionSuffix, isPathInFolder } from "./path";
+import { addCollisionSuffix, isPathInFolder, parentFolder } from "./path";
 import {
   MAX_ARCHIVE_HISTORY,
   normalizeTag,
@@ -115,6 +115,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     const wantedPath = this.host.normalizePath(`${archiveFolder}/${relativePath}`);
     await this.ensureFolder(wantedPath.slice(0, wantedPath.lastIndexOf("/")));
     const destination = this.uniquePath(wantedPath);
+    if (this.isExcludedPath(destination)) {
+      throw new Error(`Cannot archive ${file.name}: the archive folder is inside a protected location.`);
+    }
     await this.host.renameFile(file, destination);
 
     let metadataError: unknown;
@@ -143,7 +146,10 @@ export class ArchiveManager<File extends ArchiveFile> {
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
     const { inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
 
-    const parent = originalPath.slice(0, originalPath.lastIndexOf("/"));
+    if (this.isExcludedPath(originalPath)) {
+      throw new Error(`Cannot restore ${file.name}: ${originalPath} is in a protected location.`);
+    }
+    const parent = parentFolder(originalPath);
     await this.ensureFolder(parent);
     const destination = this.uniquePath(originalPath);
     await this.host.renameFile(file, destination);
@@ -212,20 +218,29 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (!candidate || candidate.startsWith("/") || candidate.includes("\\")) return false;
     if (candidate.split("/").some((part) => !part || part === "." || part === "..")) return false;
     const folder = this.archiveFolder();
-    return !folder || folder === "." || !isPathInFolder(candidate, folder);
+    if (folder && folder !== "." && isPathInFolder(candidate, folder)) return false;
+    // Never restore into a protected location; fall back to inference instead.
+    if (this.isExcludedPath(candidate)) return false;
+    return true;
   }
 
   private async reconcileRenameNow(oldPath: string, newPath: string): Promise<void> {
     if (!oldPath || oldPath === newPath) return;
     const folder = this.archiveFolder();
-    const staysArchived = !!folder && folder !== "." && isPathInFolder(newPath, folder);
+    const folderConfigured = !!folder && folder !== ".";
+    // Renaming the archive folder itself (or one of its ancestors) moves
+    // archived files with it. Keep tracking them at the new location instead
+    // of dropping their history; only drop records when an archived item is
+    // moved out of a still-configured archive folder.
+    const archiveMoved = folderConfigured && (oldPath === folder || isPathInFolder(folder, oldPath));
+    const staysArchived = folderConfigured && isPathInFolder(newPath, folder);
     const history = this.getHistory();
     let changed = false;
     const kept: ArchiveRecord[] = [];
     for (const record of history) {
       if (record.archivedPath === oldPath || isPathInFolder(record.archivedPath, oldPath)) {
         changed = true;
-        if (staysArchived) {
+        if (staysArchived || archiveMoved || !folderConfigured) {
           const suffix = record.archivedPath.slice(oldPath.length);
           kept.push({ ...record, archivedPath: `${newPath}${suffix}` });
         }
@@ -302,9 +317,17 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   private readTags(value: unknown): string[] {
-    if (Array.isArray(value)) return value.map(String);
-    if (typeof value === "string") return value.split(/[ ,]+/).filter(Boolean);
-    return [];
+    let raw: string[];
+    if (Array.isArray(value)) {
+      raw = value.map(String);
+    } else if (typeof value === "string") {
+      raw = value.split(/[ ,]+/).filter(Boolean);
+    } else {
+      raw = [];
+    }
+    // Strip leading "#" markers so stored tags stay consistent ("#foo" and
+    // "foo" are the same tag). Invalid leftovers are dropped.
+    return raw.map((tag) => tag.replace(/^#+/, "")).filter(Boolean);
   }
 
   private setHistoricalDate(
@@ -328,7 +351,8 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (snapshot.properties.some((property) => property.key === key)) return;
     const existed = Object.prototype.hasOwnProperty.call(frontmatter, key);
     const property: ArchivePropertySnapshot = { existed, key };
-    if (existed) property.value = frontmatter[key];
+    // Clone objects so later frontmatter edits can't mutate the restore snapshot.
+    if (existed) property.value = cloneValue(frontmatter[key]);
     snapshot.properties.push(property);
   }
 
@@ -354,7 +378,10 @@ export class ArchiveManager<File extends ArchiveFile> {
 
   private inferOriginalPath(file: File): string {
     const archiveFolder = this.archiveFolder();
-    if (this.getSettings().preserveFolders && isPathInFolder(file.path, archiveFolder)) {
+    // Strip the archive prefix whenever the file is inside the archive folder,
+    // regardless of the preserveFolders setting. That setting only controls
+    // where new archives are placed, not where legacy files came from.
+    if (!!archiveFolder && archiveFolder !== "." && isPathInFolder(file.path, archiveFolder)) {
       const relative = file.path.slice(archiveFolder.length + 1);
       if (relative) return relative;
     }
@@ -376,3 +403,8 @@ export class ArchiveManager<File extends ArchiveFile> {
 }
 
 const DEFAULT_DATE_FORMAT = "YYYY-MM-DD";
+
+function cloneValue<T>(value: T): T {
+  if (typeof value !== "object" || value === null) return value;
+  return structuredClone(value);
+}
