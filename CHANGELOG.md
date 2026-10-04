@@ -2,6 +2,12 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.3.2 — 2026-10-04
+
+### Changed
+
+- Updated dev dependencies: `eslint` (10.11.0), `@types/node` (26.6.3), and `globals` (17.13.0).
+
 ## 0.3.1 — 2026-09-20
 
 ### Security
