@@ -317,11 +317,14 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   private readTags(value: unknown): string[] {
-    const raw = Array.isArray(value)
-      ? value.map(String)
-      : typeof value === "string"
-        ? value.split(/[ ,]+/).filter(Boolean)
-        : [];
+    let raw: string[];
+    if (Array.isArray(value)) {
+      raw = value.map(String);
+    } else if (typeof value === "string") {
+      raw = value.split(/[ ,]+/).filter(Boolean);
+    } else {
+      raw = [];
+    }
     // Strip leading "#" markers so stored tags stay consistent ("#foo" and
     // "foo" are the same tag). Invalid leftovers are dropped.
     return raw.map((tag) => tag.replace(/^#+/, "")).filter(Boolean);

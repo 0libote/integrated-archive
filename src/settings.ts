@@ -231,10 +231,13 @@ export function validateExcludedPaths(value: string): string | undefined {
 }
 
 export function validateExcludedOverlap(archiveFolder: string, value: string): string | undefined {
-  const folder = archiveFolder.trim().replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
+  const folder = stripSlashes(archiveFolder.trim()).replace(/\/{2,}/g, "/");
   if (!folder || folder === ".") return undefined;
-  for (const path of parseExcludedPaths(value)) {
-    if (path === folder || isPathInFolder(path, folder) || isPathInFolder(folder, path)) {
+  for (const excluded of parseExcludedPaths(value)) {
+    if (excluded === folder) return "Protected paths overlap the archive folder.";
+    const protectedInsideArchive = isPathInFolder(excluded, folder);
+    const archiveInsideProtected = isPathInFolder(folder, excluded);
+    if (protectedInsideArchive || archiveInsideProtected) {
       return "Protected paths overlap the archive folder.";
     }
   }
