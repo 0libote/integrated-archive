@@ -2,6 +2,27 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.4.0 — 2026-10-05
+
+### Added
+
+- Confirm bulk archive and restore operations over 10 files.
+- Block restores into protected paths and archiving when the archive folder sits inside a protected path, with a settings validation for overlapping paths.
+- Redirect direct `trashFile` deletes to the archive in "Archive automatically" mode.
+
+### Changed
+
+- Hide "Archive all files in current folder" at the vault root so it cannot archive the whole vault.
+- Clarified one-file-at-a-time undo ("Undo last file archive"), the 200-record history cap, Markdown-only stored original paths, and folder deletes using the normal flow.
+- Normalized stored tags (`#foo` → `foo`) and deep-cloned metadata snapshots.
+
+### Fixed
+
+- Restoring a root-level file no longer creates a spurious `note.m/` folder.
+- Renaming the archive folder (or an ancestor) keeps and rewrites archive history instead of dropping it.
+- Legacy restores in flat mode recover nested paths (`Archive/Projects/note.md` → `Projects/note.md`).
+- Delete prompt no longer double-deletes: archiving consumes the delete, and "Delete" trashes exactly once across one-step and two-step Explorer flows.
+
 ## 0.3.2 — 2026-10-04
 
 ### Changed
