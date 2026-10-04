@@ -11,6 +11,11 @@ export function isPathInFolder(path: string, folder: string): boolean {
   return path === folder || path.startsWith(`${folder}/`);
 }
 
+export function parentFolder(path: string): string {
+  const slash = path.lastIndexOf("/");
+  return slash > 0 ? path.slice(0, slash) : "";
+}
+
 export type DeleteAction = "ask" | "archive" | "delete";
 
 export function resolveDeleteAction(value?: string, oldPrompt?: boolean): DeleteAction {

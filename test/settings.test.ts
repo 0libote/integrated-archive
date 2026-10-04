@@ -186,6 +186,7 @@ test("validates date formats", () => {
 test("parses, sanitizes, and validates protected paths", () => {
   assert.deepEqual(parseExcludedPaths(" Private \n/Templates/\n\n"), ["Private", "Templates"]);
   assert.deepEqual(parseExcludedPaths(""), []);
+  assert.deepEqual(parseExcludedPaths("Private//Templates"), ["Private/Templates"]);
   assert.equal(sanitizeExcludedPaths("Private\n../Secret\nTemplates"), "Private\nTemplates");
   assert.equal(sanitizeExcludedPaths("Private\r\nTemplates"), "Private\nTemplates");
   assert.equal(validateExcludedPaths("Private\nTemplates"), undefined);

@@ -202,7 +202,7 @@ export function validateDateFormat(value: string): string | undefined {
 export function parseExcludedPaths(value: string): string[] {
   return value
     .split("\n")
-    .map((line) => stripSlashes(line.trim()))
+    .map((line) => stripSlashes(line.trim()).replace(/\/{2,}/g, "/"))
     .filter(Boolean);
 }
 
