@@ -15,6 +15,7 @@ Integrated Archive moves files out of active work without treating them as dispo
 - Choose whether Delete asks each time, archives automatically, or uses Obsidian’s normal delete flow.
 - The optional prompt offers **Archive / Delete / Cancel**. Delete follows your configured Obsidian trash setting and may be permanent.
 - Configurable archive folder with optional original folder structure.
+- Optionally delete folders that become empty after archiving.
 - Optional archive tag and archived, created, and last-edited frontmatter dates.
 - Optionally write the original path into archived notes so they can be restored even when archive history is lost or synced to another device.
 - Protect paths that should never be archived.

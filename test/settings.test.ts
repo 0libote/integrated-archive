@@ -23,6 +23,7 @@ test("sanitizes missing, malformed, and legacy settings", () => {
   const malformed = sanitizeSettings({
     archiveFolder: " ../Archive ",
     preserveFolders: "yes",
+    cleanEmptyFolders: "yes",
     tag: "#",
     addTag: false,
     archivedProperty: "__proto__",
@@ -34,6 +35,7 @@ test("sanitizes missing, malformed, and legacy settings", () => {
   });
   assert.equal(malformed.archiveFolder, "Archive");
   assert.equal(malformed.preserveFolders, false);
+  assert.equal(malformed.cleanEmptyFolders, false);
   assert.equal(malformed.tag, "archived");
   assert.equal(malformed.addTag, false);
   assert.equal(malformed.dateFormat, "YYYY-MM-DD");
@@ -81,6 +83,7 @@ test("keeps valid settings and normalizes a leading tag marker", () => {
   const settings = sanitizeSettings({
     archiveFolder: "Storage/Archive",
     preserveFolders: true,
+    cleanEmptyFolders: true,
     deleteAction: "archive",
     tag: "#project/archive",
     existingDateAction: "overwrite",
@@ -88,6 +91,7 @@ test("keeps valid settings and normalizes a leading tag marker", () => {
 
   assert.equal(settings.archiveFolder, "Storage/Archive");
   assert.equal(settings.preserveFolders, true);
+  assert.equal(settings.cleanEmptyFolders, true);
   assert.equal(settings.deleteAction, "archive");
   assert.equal(settings.tag, "project/archive");
   assert.equal(settings.existingDateAction, "overwrite");

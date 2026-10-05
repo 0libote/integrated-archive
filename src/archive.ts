@@ -23,10 +23,12 @@ export type VaultEntryKind = "file" | "folder";
 
 export interface ArchiveHost<File extends ArchiveFile> {
   createFolder(path: string): Promise<void>;
+  deleteFolder(path: string): Promise<void>;
   formatDate(timestamp: number, pattern: string): string;
   getArchiveHistory(): ArchiveRecord[];
   getEntryKind(path: string): VaultEntryKind | null;
   getFile(path: string): File | null;
+  getFolderChildren(path: string): string[] | null;
   getFrontmatter(file: File): Promise<Record<string, unknown> | undefined>;
   normalizePath(path: string): string;
   now(): number;
@@ -36,6 +38,7 @@ export interface ArchiveHost<File extends ArchiveFile> {
 }
 
 export interface ArchiveResult {
+  cleanedFolders: string[];
   destination: string;
   historyError?: unknown;
   metadataError?: unknown;
@@ -135,7 +138,42 @@ export class ArchiveManager<File extends ArchiveFile> {
       historyError = error;
     }
 
-    return { destination, historyError, metadataError, originalPath };
+    const cleanedFolders = await this.cleanupEmptyParents(originalPath);
+
+    return { cleanedFolders, destination, historyError, metadataError, originalPath };
+  }
+
+  private async cleanupEmptyParents(originalPath: string): Promise<string[]> {
+    const cleaned: string[] = [];
+    if (!this.getSettings().cleanEmptyFolders) return cleaned;
+    const archiveFolder = this.archiveFolder();
+    let current = parentFolder(originalPath);
+    while (current) {
+      // Never delete the archive folder itself, anything inside it, or an
+      // ancestor that contains it (such a folder cannot be empty anyway, but
+      // guard explicitly so cleanup can never remove the archive's parent).
+      if (!!archiveFolder && archiveFolder !== "."
+        && (current === archiveFolder || isPathInFolder(current, archiveFolder) || isPathInFolder(archiveFolder, current))) {
+        break;
+      }
+      // Never delete a protected location, even when it becomes empty.
+      if (this.isExcludedPath(current)) break;
+      let children: string[] | null;
+      try {
+        children = this.host.getFolderChildren(current);
+      } catch {
+        break;
+      }
+      if (children === null || children.length !== 0) break;
+      try {
+        await this.host.deleteFolder(current);
+      } catch {
+        break;
+      }
+      cleaned.push(current);
+      current = parentFolder(current);
+    }
+    return cleaned;
   }
 
   private async restoreNow(file: File): Promise<RestoreResult> {

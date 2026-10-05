@@ -107,6 +107,12 @@ export default class IntegratedArchivePlugin extends Plugin {
     await this.loadSettings();
     const host: ArchiveHost<TFile> = {
       createFolder: (path) => this.app.vault.createFolder(path).then(() => undefined),
+      deleteFolder: async (path) => {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        // Route through the file manager so empty-folder cleanup respects the
+        // user's trash preference. Only already-empty folders reach this point.
+        if (entry instanceof TFolder) await this.app.fileManager.trashFile(entry);
+      },
       formatDate: (timestamp, pattern) => createMoment(timestamp).format(pattern),
       getArchiveHistory: () => this.settings.archiveHistory,
       getEntryKind: (path) => {
@@ -117,6 +123,11 @@ export default class IntegratedArchivePlugin extends Plugin {
       getFile: (path) => {
         const entry = this.app.vault.getAbstractFileByPath(path);
         return entry instanceof TFile ? entry : null;
+      },
+      getFolderChildren: (path) => {
+        const entry = this.app.vault.getAbstractFileByPath(path);
+        if (!(entry instanceof TFolder)) return null;
+        return entry.children.map((child) => child.path);
       },
       getFrontmatter: (file) => Promise.resolve(this.app.metadataCache.getFileCache(file)?.frontmatter),
       normalizePath,
@@ -401,6 +412,7 @@ class ArchiveSettingTab extends PluginSettingTab {
             control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: validateArchiveFolder },
           },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
+          { name: "Clean up empty folders", desc: "Delete folders that become empty after archiving. Never deletes the vault root, the archive folder, or protected paths.", control: { type: "toggle", key: "cleanEmptyFolders" } },
           {
             name: "When deleting",
             desc: "Choose what happens to files outside the archive. Folders and archived files always use Obsidian’s normal delete flow.",
