@@ -2,6 +2,12 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## Unreleased
+
+### Added
+
+- Optionally delete folders that become empty after archiving ("Clean up empty folders" under Archiving settings). The vault root, the archive folder, and protected paths are never deleted.
+
 ## 0.4.0 — 2026-10-05
 
 ### Added
