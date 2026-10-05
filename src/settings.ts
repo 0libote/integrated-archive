@@ -25,6 +25,7 @@ export interface ArchiveRecord {
 export interface ArchiveSettings {
   archiveFolder: string;
   preserveFolders: boolean;
+  cleanEmptyFolders: boolean;
   deleteAction: DeleteAction;
   showArchiveMenu: boolean;
   addTag: boolean;
@@ -49,6 +50,7 @@ export interface ArchiveData extends ArchiveSettings {
 export const DEFAULT_SETTINGS: ArchiveSettings = {
   archiveFolder: "Archive",
   preserveFolders: false,
+  cleanEmptyFolders: false,
   deleteAction: "ask",
   showArchiveMenu: true,
   addTag: true,
@@ -73,6 +75,7 @@ export const DEFAULT_DATA: ArchiveData = {
 
 const BOOLEAN_KEYS = [
   "preserveFolders",
+  "cleanEmptyFolders",
   "showArchiveMenu",
   "addTag",
   "addArchivedDate",

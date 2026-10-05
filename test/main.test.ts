@@ -197,6 +197,9 @@ function makeApp() {
       },
       async renameFile(file, destination) {
         entries.delete(file.path);
+        if (file.parent) {
+          file.parent.children = file.parent.children.filter((child) => child !== file);
+        }
         file.path = destination;
         file.name = destination.slice(destination.lastIndexOf("/") + 1);
         entries.set(destination, file);
@@ -204,6 +207,9 @@ function makeApp() {
       async trashFile(file) {
         trashed.push(file.path);
         entries.delete(file.path);
+        if (file.parent) {
+          file.parent.children = file.parent.children.filter((child) => child !== file);
+        }
       },
     },
     vault: {
@@ -523,6 +529,39 @@ test("hides the folder command at the vault root", async () => {
   const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
   expect(check?.(true)).toBe(false);
 });
+
+test("deletes newly-empty folders through the plugin when enabled", async () => {
+  const { fixture, file } = await archiveSoloInProjectFolder({ cleanEmptyFolders: true });
+
+  expect(await plugin!.archive(file as never)).toBe(true);
+
+  expect(file.path).toBe("Archive/solo.md");
+  expect(fixture.entries.has("Projects")).toBe(false);
+  expect(notices).toContain("Archived to Archive/solo.md");
+});
+
+test("keeps source folders through the plugin when cleanup is disabled", async () => {
+  const { fixture, file } = await archiveSoloInProjectFolder(null);
+
+  expect(await plugin!.archive(file as never)).toBe(true);
+
+  expect(file.path).toBe("Archive/solo.md");
+  expect(fixture.entries.has("Projects")).toBe(true);
+});
+
+async function archiveSoloInProjectFolder(loadedData: unknown) {
+  const fixture = makeApp();
+  fixture.app.loadedData = loadedData;
+  const folder = new MockFolder("Projects", "Projects");
+  const file = new MockFile("Projects/solo.md");
+  file.parent = folder;
+  folder.children = [file];
+  fixture.entries.set(folder.path, folder);
+  fixture.entries.set(file.path, file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  return { fixture, file };
+}
 
 class MenuItem {
   constructor(private readonly titles: string[]) {}

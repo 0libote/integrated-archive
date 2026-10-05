@@ -15,6 +15,7 @@ Integrated Archive moves files out of active work without treating them as dispo
 - Choose whether Delete asks each time, archives automatically, or uses Obsidian’s normal delete flow.
 - The optional prompt offers **Archive / Delete / Cancel**. Delete follows your configured Obsidian trash setting and may be permanent.
 - Configurable archive folder with optional original folder structure.
+- Optionally delete folders that become empty after archiving.
 - Optional archive tag and archived, created, and last-edited frontmatter dates.
 - Optionally write the original path into archived notes so they can be restored even when archive history is lost or synced to another device.
 - Protect paths that should never be archived.
@@ -24,7 +25,7 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 ## Use
 
-Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, and date format under **Settings → Integrated Archive**.
+Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, empty-folder cleanup, and date format under **Settings → Integrated Archive**.
 
 Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation, and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one file at a time: archiving N files takes N undos.
 

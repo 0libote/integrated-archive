@@ -25,6 +25,7 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
   const files = new Map<string, TestFile>();
   let history: ArchiveRecord[] = [];
   const createdFolders: string[] = [];
+  const deletedFolders: string[] = [];
   const renames: Array<{ from: string; to: string }> = [];
   let historyError: unknown;
   let metadataError: unknown;
@@ -33,6 +34,10 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
     async createFolder(path) {
       createdFolders.push(path);
       entries.set(path, "folder");
+    },
+    async deleteFolder(path) {
+      deletedFolders.push(path);
+      entries.delete(path);
     },
     formatDate(timestamp, pattern) {
       return `${pattern}:${timestamp}`;
@@ -45,6 +50,21 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
     },
     getFile(path) {
       return files.get(path) ?? null;
+    },
+    getFolderChildren(path) {
+      if (entries.get(path) !== "folder") return null;
+      const prefix = `${path}/`;
+      const children = new Set<string>();
+      const consider = (key: string): void => {
+        if (!key.startsWith(prefix)) return;
+        const rest = key.slice(prefix.length);
+        if (!rest) return;
+        const slash = rest.indexOf("/");
+        children.add(slash < 0 ? key : `${path}/${rest.slice(0, slash)}`);
+      };
+      for (const key of entries.keys()) consider(key);
+      for (const key of files.keys()) consider(key);
+      return [...children];
     },
     async getFrontmatter(file) {
       return file.frontmatter;
@@ -76,6 +96,7 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
 
   return {
     createdFolders,
+    deletedFolders,
     entries,
     files,
     getHistory: () => history,
@@ -102,6 +123,7 @@ test("archives a file and creates the destination folder", async () => {
   const result = await fixture.manager.archive(file);
 
   assert.deepEqual(result, {
+    cleanedFolders: [],
     destination: "Archive/note.md",
     historyError: undefined,
     metadataError: undefined,
@@ -557,3 +579,87 @@ test("refuses to archive when the archive folder is protected", async () => {
 
   await assert.rejects(() => fixture.manager.archive(makeFile("Projects/note.md")), /protected location/);
 });
+
+test("leaves empty folders behind by default", async () => {
+  const fixture = makeFixture();
+  fixture.entries.set("Projects", "folder");
+  const file = registerFile(fixture, "Projects/note.md");
+
+  const result = await fixture.manager.archive(file);
+
+  assert.deepEqual(result.cleanedFolders, []);
+  assert.deepEqual(fixture.deletedFolders, []);
+  assert.equal(fixture.entries.get("Projects"), "folder");
+});
+
+test("removes folders that become empty after archiving when enabled", async () => {
+  const fixture = makeFixture({ cleanEmptyFolders: true });
+  fixture.entries.set("Projects", "folder");
+  fixture.entries.set("Projects/Sub", "folder");
+  const file = registerFile(fixture, "Projects/Sub/note.md");
+
+  const result = await fixture.manager.archive(file);
+
+  assert.equal(result.destination, "Archive/note.md");
+  assert.deepEqual(result.cleanedFolders, ["Projects/Sub", "Projects"]);
+  assert.deepEqual(fixture.deletedFolders, ["Projects/Sub", "Projects"]);
+});
+
+test("stops cleanup at the first folder that still contains files", async () => {
+  const fixture = makeFixture({ cleanEmptyFolders: true });
+  fixture.entries.set("Projects", "folder");
+  fixture.entries.set("Projects/Sub", "folder");
+  registerFile(fixture, "Projects/keep.md");
+  const file = registerFile(fixture, "Projects/Sub/note.md");
+
+  const result = await fixture.manager.archive(file);
+
+  assert.deepEqual(result.cleanedFolders, ["Projects/Sub"]);
+  assert.deepEqual(fixture.deletedFolders, ["Projects/Sub"]);
+  assert.equal(fixture.entries.get("Projects"), "folder");
+});
+
+test("never deletes the archive folder or an ancestor containing it", async () => {
+  const fixture = makeFixture({ archiveFolder: "Storage/Archive", cleanEmptyFolders: true });
+  fixture.entries.set("Storage", "folder");
+  const file = registerFile(fixture, "Storage/note.md");
+
+  const result = await fixture.manager.archive(file);
+
+  assert.equal(result.destination, "Storage/Archive/note.md");
+  assert.deepEqual(result.cleanedFolders, []);
+  assert.deepEqual(fixture.deletedFolders, []);
+  assert.equal(fixture.entries.get("Storage"), "folder");
+});
+
+test("handles root-level files without attempting cleanup", async () => {
+  const fixture = makeFixture({ cleanEmptyFolders: true });
+
+  const result = await fixture.manager.archive(makeFile("note.md"));
+
+  assert.equal(result.destination, "Archive/note.md");
+  assert.deepEqual(result.cleanedFolders, []);
+  assert.deepEqual(fixture.deletedFolders, []);
+});
+
+test("treats cleanup failures as non-fatal", async () => {
+  const fixture = makeFixture({ cleanEmptyFolders: true });
+  fixture.entries.set("Projects", "folder");
+  const file = registerFile(fixture, "Projects/note.md");
+  fixture.host.deleteFolder = async () => {
+    throw new Error("denied");
+  };
+
+  const result = await fixture.manager.archive(file);
+
+  assert.equal(result.destination, "Archive/note.md");
+  assert.equal(file.path, "Archive/note.md");
+  assert.deepEqual(result.cleanedFolders, []);
+});
+
+function registerFile(fixture: ReturnType<typeof makeFixture>, path: string): TestFile {
+  const file = makeFile(path);
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+  return file;
+}
