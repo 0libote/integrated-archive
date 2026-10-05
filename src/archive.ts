@@ -164,7 +164,7 @@ export class ArchiveManager<File extends ArchiveFile> {
       } catch {
         break;
       }
-      if (children === null || children.length !== 0) break;
+      if (children?.length !== 0) break;
       try {
         await this.host.deleteFolder(current);
       } catch {
