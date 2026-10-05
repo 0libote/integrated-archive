@@ -18,9 +18,10 @@ export async function runBatch<Item, Result>(
   operation: (item: Item) => Promise<Result>,
 ): Promise<BatchResult<Item, Result>> {
   const result: BatchResult<Item, Result> = { failed: [], succeeded: [] };
+  // Sequential by design: preserves input order and isolates per-item failures.
   for (const item of items) {
     try {
-      result.succeeded.push({ item, result: await operation(item) });
+      result.succeeded.push({ item, result: await operation(item) }); // NOSONAR typescript:S9382
     } catch (error) {
       result.failed.push({ error, item });
     }

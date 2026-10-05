@@ -19,7 +19,7 @@ export function parentFolder(path: string): string {
 export type DeleteAction = "ask" | "archive" | "delete";
 
 export function resolveDeleteAction(value?: string, oldPrompt?: boolean): DeleteAction {
-  return value === "archive" || value === "delete" || value === "ask"
-    ? value
-    : oldPrompt === false ? "delete" : "ask";
+  if (value === "archive" || value === "delete" || value === "ask") return value;
+  if (oldPrompt === false) return "delete";
+  return "ask";
 }

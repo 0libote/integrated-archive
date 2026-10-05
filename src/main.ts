@@ -379,7 +379,7 @@ export default class IntegratedArchivePlugin extends Plugin {
 }
 
 class ArchiveSettingTab extends PluginSettingTab {
-  constructor(app: App, private plugin: IntegratedArchivePlugin) {
+  constructor(app: App, private readonly plugin: IntegratedArchivePlugin) {
     super(app, plugin);
   }
 

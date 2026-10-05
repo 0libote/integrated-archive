@@ -258,11 +258,12 @@ export class ArchiveManager<File extends ArchiveFile> {
   private async ensureFolder(path: string): Promise<void> {
     if (!path) return;
     let current = "";
+    // Sequential by design: each level depends on its parent existing.
     for (const part of path.split("/")) {
       current = current ? `${current}/${part}` : part;
       const existing = this.host.getEntryKind(current);
       if (existing === "file") throw new Error(`${current} is a file, not a folder.`);
-      if (!existing) await this.host.createFolder(current);
+      if (!existing) await this.host.createFolder(current); // NOSONAR typescript:S9382
     }
   }
 
