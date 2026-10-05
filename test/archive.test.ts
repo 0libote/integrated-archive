@@ -583,9 +583,7 @@ test("refuses to archive when the archive folder is protected", async () => {
 test("leaves empty folders behind by default", async () => {
   const fixture = makeFixture();
   fixture.entries.set("Projects", "folder");
-  const file = makeFile("Projects/note.md");
-  fixture.entries.set(file.path, "file");
-  fixture.files.set(file.path, file);
+  const file = registerFile(fixture, "Projects/note.md");
 
   const result = await fixture.manager.archive(file);
 
@@ -598,9 +596,7 @@ test("removes folders that become empty after archiving when enabled", async () 
   const fixture = makeFixture({ cleanEmptyFolders: true });
   fixture.entries.set("Projects", "folder");
   fixture.entries.set("Projects/Sub", "folder");
-  const file = makeFile("Projects/Sub/note.md");
-  fixture.entries.set(file.path, "file");
-  fixture.files.set(file.path, file);
+  const file = registerFile(fixture, "Projects/Sub/note.md");
 
   const result = await fixture.manager.archive(file);
 
@@ -613,12 +609,8 @@ test("stops cleanup at the first folder that still contains files", async () => 
   const fixture = makeFixture({ cleanEmptyFolders: true });
   fixture.entries.set("Projects", "folder");
   fixture.entries.set("Projects/Sub", "folder");
-  const kept = makeFile("Projects/keep.md");
-  fixture.entries.set(kept.path, "file");
-  fixture.files.set(kept.path, kept);
-  const file = makeFile("Projects/Sub/note.md");
-  fixture.entries.set(file.path, "file");
-  fixture.files.set(file.path, file);
+  registerFile(fixture, "Projects/keep.md");
+  const file = registerFile(fixture, "Projects/Sub/note.md");
 
   const result = await fixture.manager.archive(file);
 
@@ -630,9 +622,7 @@ test("stops cleanup at the first folder that still contains files", async () => 
 test("never deletes the archive folder or an ancestor containing it", async () => {
   const fixture = makeFixture({ archiveFolder: "Storage/Archive", cleanEmptyFolders: true });
   fixture.entries.set("Storage", "folder");
-  const file = makeFile("Storage/note.md");
-  fixture.entries.set(file.path, "file");
-  fixture.files.set(file.path, file);
+  const file = registerFile(fixture, "Storage/note.md");
 
   const result = await fixture.manager.archive(file);
 
@@ -655,9 +645,7 @@ test("handles root-level files without attempting cleanup", async () => {
 test("treats cleanup failures as non-fatal", async () => {
   const fixture = makeFixture({ cleanEmptyFolders: true });
   fixture.entries.set("Projects", "folder");
-  const file = makeFile("Projects/note.md");
-  fixture.entries.set(file.path, "file");
-  fixture.files.set(file.path, file);
+  const file = registerFile(fixture, "Projects/note.md");
   fixture.host.deleteFolder = async () => {
     throw new Error("denied");
   };
@@ -668,3 +656,10 @@ test("treats cleanup failures as non-fatal", async () => {
   assert.equal(file.path, "Archive/note.md");
   assert.deepEqual(result.cleanedFolders, []);
 });
+
+function registerFile(fixture: ReturnType<typeof makeFixture>, path: string): TestFile {
+  const file = makeFile(path);
+  fixture.entries.set(file.path, "file");
+  fixture.files.set(file.path, file);
+  return file;
+}
