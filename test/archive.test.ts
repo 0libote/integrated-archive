@@ -663,3 +663,34 @@ function registerFile(fixture: ReturnType<typeof makeFixture>, path: string): Te
   fixture.files.set(file.path, file);
   return file;
 }
+
+test("preserves metadata edits made while archived and removes only the archive tag", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  file.frontmatter = { tags: ["active"], archived: "previous" };
+  await fixture.manager.archive(file);
+  file.frontmatter.tags = ["active", "archived", "new-tag"];
+  file.frontmatter.archived = "user-edited";
+  delete file.frontmatter.created;
+  await fixture.manager.restore(file);
+  assert.deepEqual(file.frontmatter, { tags: ["active", "new-tag"], archived: "user-edited" });
+});
+
+test("restores legacy metadata snapshots without archived values", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  file.frontmatter.tags = ["original"];
+  await fixture.manager.archive(file);
+  for (const property of fixture.getHistory()[0]!.metadata!.properties) delete property.archivedValue;
+  await fixture.manager.restore(file);
+  assert.deepEqual(file.frontmatter, { tags: ["original"] });
+});
+
+test("preserves string tag edits made while archived", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  await fixture.manager.archive(file);
+  file.frontmatter.tags = "archived new-tag";
+  await fixture.manager.restore(file);
+  assert.equal(file.frontmatter.tags, "new-tag");
+});

@@ -351,6 +351,9 @@ export class ArchiveManager<File extends ArchiveFile> {
         this.captureProperty(snapshot, frontmatter, property);
         frontmatter[property] = originalPath;
       }
+      for (const property of snapshot.properties) {
+        property.archivedValue = cloneValue(frontmatter[property.key]);
+      }
     });
     return snapshot.properties.length ? snapshot : undefined;
   }
@@ -399,7 +402,21 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (file.extension !== "md" || !snapshot.properties.length) return;
     await this.host.processFrontMatter(file, (frontmatter) => {
       for (const property of snapshot.properties) {
-        if (property.existed) frontmatter[property.key] = property.value;
+        if (Object.prototype.hasOwnProperty.call(property, "archivedValue")
+          && !valuesEqual(frontmatter[property.key], property.archivedValue)) {
+          // Remove only the tag introduced by archiving, preserving later edits.
+          if (property.key === "tags" && (Array.isArray(frontmatter.tags) || typeof frontmatter.tags === "string") && Array.isArray(property.archivedValue)) {
+            const originalTags = this.readTags(property.value).map((tag) => tag.toLowerCase());
+            const addedTags = this.readTags(property.archivedValue)
+              .filter((tag) => !originalTags.includes(tag.toLowerCase()));
+            const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags : this.readTags(frontmatter.tags);
+            const remaining = tags.filter((tag) =>
+              !addedTags.some((added) => normalizeTag(String(tag))?.toLowerCase() === added.toLowerCase()));
+            frontmatter.tags = typeof frontmatter.tags === "string" ? remaining.join(" ") : remaining;
+          }
+          continue;
+        }
+        if (property.existed) frontmatter[property.key] = cloneValue(property.value);
         else delete frontmatter[property.key];
       }
     });
@@ -446,4 +463,17 @@ const DEFAULT_DATE_FORMAT = "YYYY-MM-DD";
 function cloneValue<T>(value: T): T {
   if (typeof value !== "object" || value === null) return value;
   return structuredClone(value);
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (Array.isArray(left) && Array.isArray(right)) {
+    return left.length === right.length && left.every((value, index) => valuesEqual(value, right[index]));
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) return false;
+  const a = left as Record<string, unknown>;
+  const b = right as Record<string, unknown>;
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length
+    && keys.every((key) => Object.prototype.hasOwnProperty.call(b, key) && valuesEqual(a[key], b[key]));
 }

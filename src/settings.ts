@@ -9,6 +9,7 @@ export interface ArchivePropertySnapshot {
   existed: boolean;
   key: string;
   value?: unknown;
+  archivedValue?: unknown;
 }
 
 export interface ArchiveMetadataSnapshot {

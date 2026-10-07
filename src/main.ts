@@ -219,7 +219,7 @@ export default class IntegratedArchivePlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
       if (!this.settings.showArchiveMenu) return;
-      const activeFiles = files.filter((file): file is TFile => file instanceof TFile && !this.isArchived(file));
+      const activeFiles = files.filter((file): file is TFile => file instanceof TFile && !this.isArchived(file) && !this.archiveManager.isExcludedPath(file.path));
       const archivedFiles = files.filter((file): file is TFile => file instanceof TFile && this.isArchived(file));
       if (activeFiles.length) {
         menu.addItem((item) => item
@@ -409,7 +409,7 @@ class ArchiveSettingTab extends PluginSettingTab {
           {
             name: "Archive folder",
             desc: "Path relative to the vault root.",
-            control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: validateArchiveFolder },
+            control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: (value) => validateArchiveFolder(value) ?? validateExcludedOverlap(value, s.excludedPaths) },
           },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           { name: "Clean up empty folders", desc: "Delete folders that become empty after archiving. Never deletes the vault root, the archive folder, or protected paths.", control: { type: "toggle", key: "cleanEmptyFolders" } },

@@ -573,3 +573,28 @@ class MenuItem {
     return this;
   }
 }
+
+test("excludes protected files from multi-file archive menus", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { excludedPaths: "Private" };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:files-menu")?.(menu, [new MockFile("Private/secret.md"), new MockFile("note.md")]);
+  expect(titles).toEqual(["Archive 1 file"]);
+});
+
+test("rejects archive folder edits overlapping protected paths", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { excludedPaths: "Private" };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const tab = (plugin as unknown as MockPlugin).settingTabs[0] as {
+    getSettingDefinitions(): Array<{ items: Array<{ control?: { key: string; validate?: (value: string) => string | undefined } }> }>;
+  };
+  const control = tab.getSettingDefinitions().flatMap((group) => group.items)
+    .find((item) => item.control?.key === "archiveFolder")!.control!;
+  expect(control.validate!("Private/Archive")).toBe("Protected paths overlap the archive folder.");
+  expect(control.validate!("Archive")).toBeUndefined();
+});

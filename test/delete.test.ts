@@ -220,3 +220,49 @@ test("remains correct when another wrapper is removed in either order", async ()
     "original:cleanup-two.md",
   ]);
 });
+
+test("archives unrelated concurrent deletes and coalesces duplicate requests", async () => {
+  const fixture = makeFixture();
+  fixture.setAction("archive");
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  fixture.options.archive = async (file) => {
+    fixture.calls.push(`archive:${file.path}`);
+    await pending;
+    return true;
+  };
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+  const first = new File("first.md");
+  const requests = [fixture.manager.trashFile(first), fixture.manager.trashFile(first),
+    fixture.manager.trashFile(new File("second.md"))];
+  await Promise.resolve();
+  release();
+  await Promise.all(requests);
+  assert.deepEqual(fixture.calls, ["archive:first.md", "archive:second.md"]);
+  uninstall();
+});
+
+test("consumes duplicate deletes after the pending archive has moved the file", async () => {
+  const fixture = makeFixture();
+  fixture.setAction("archive");
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  const file = new File("Archive/note.md");
+  let moved = false;
+  fixture.options.isArchived = () => moved;
+  fixture.options.archive = async () => {
+    moved = true;
+    await pending;
+    return true;
+  };
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+  const first = fixture.manager.trashFile(file);
+  await Promise.resolve();
+  const duplicate = fixture.manager.trashFile(file);
+  const prompt = fixture.manager.promptForDeletion(file);
+  release();
+  await Promise.all([first, duplicate]);
+  assert.equal(await prompt, false);
+  assert.deepEqual(fixture.calls, []);
+  uninstall();
+});

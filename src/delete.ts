@@ -20,16 +20,26 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
   manager: DeletionManager<AbstractFile>,
   options: DeletionInterceptorOptions<AbstractFile, File>,
 ): () => void {
-  // Re-entrancy guard: actions performed inside promptForDeletion (archive or
-  // trashFile) must not re-enter the trashFile interceptor below.
-  let handling = false;
+  const explicitDeletes = new Set<AbstractFile>();
+  const archives = new Map<File, Promise<boolean>>();
+  const archiveOnce = (file: File): Promise<boolean> => {
+    const pending = archives.get(file);
+    if (pending) return pending;
+    const operation = Promise.resolve().then(() => options.archive(file));
+    archives.set(file, operation);
+    void operation.then(() => archives.delete(file), () => archives.delete(file));
+    return operation;
+  };
 
   return around(manager, {
     promptForDeletion: (next) => async function (
       this: DeletionManager<AbstractFile>,
       file: AbstractFile,
     ): Promise<boolean> {
-      if (handling) return next.call(this, file);
+      if (options.isFile(file) && archives.has(file)) {
+        await archiveOnce(file);
+        return false;
+      }
       if (!options.isFile(file) || options.isArchived(file) || options.getAction() === "delete") {
         return next.call(this, file);
       }
@@ -39,34 +49,24 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       // the result) still get the side effect. Returning false means "do not
       // proceed with deletion" in both flows.
       if (options.getAction() === "archive") {
-        handling = true;
-        try {
-          await options.archive(file);
-        } finally {
-          handling = false;
-        }
+        await archiveOnce(file);
         return false;
       }
 
       const choice = await options.choose(file);
       if (choice === "archive") {
-        handling = true;
-        try {
-          await options.archive(file);
-        } finally {
-          handling = false;
-        }
+        await archiveOnce(file);
         return false;
       }
       if (choice === "delete") {
         // Trash here and consume: two-step callers seeing `false` skip their
         // own trashFile (no double-trash), one-step callers ignoring the
         // result still get the deletion as a side effect.
-        handling = true;
+        explicitDeletes.add(file);
         try {
           await this.trashFile(file);
         } finally {
-          handling = false;
+          explicitDeletes.delete(file);
         }
         return false;
       }
@@ -76,7 +76,11 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       this: DeletionManager<AbstractFile>,
       file: AbstractFile,
     ): Promise<void> {
-      if (handling) return next.call(this, file);
+      if (explicitDeletes.has(file)) return next.call(this, file);
+      if (options.isFile(file) && archives.has(file)) {
+        await archiveOnce(file);
+        return;
+      }
       // Direct trashFile calls (programmatic deletes, some third-party menus)
       // bypass promptForDeletion entirely. In "archive automatically" mode,
       // redirect files to the archive instead of deleting them. Folders,
@@ -86,12 +90,7 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
         && options.isFile(file)
         && !options.isArchived(file)
       ) {
-        handling = true;
-        try {
-          await options.archive(file);
-        } finally {
-          handling = false;
-        }
+        await archiveOnce(file);
         return;
       }
       return next.call(this, file);

@@ -8,6 +8,13 @@ All notable changes to Integrated Archive are documented here.
 
 - Optionally delete folders that become empty after archiving ("Clean up empty folders" under Archiving settings). The vault root, the archive folder, and protected paths are never deleted.
 
+### Fixed
+
+- Concurrent delete requests no longer bypass automatic archiving; duplicate requests share the pending archive operation.
+- Restores of new archive records preserve subsequent metadata edits and remove only the archive tag added by the plugin.
+- Multi-file archive menus exclude protected files.
+- Archive folder edits reject overlaps with protected paths.
+
 ## 0.4.0 — 2026-10-05
 
 ### Added
