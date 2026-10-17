@@ -402,24 +402,47 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (file.extension !== "md" || !snapshot.properties.length) return;
     await this.host.processFrontMatter(file, (frontmatter) => {
       for (const property of snapshot.properties) {
-        if (Object.prototype.hasOwnProperty.call(property, "archivedValue")
-          && !valuesEqual(frontmatter[property.key], property.archivedValue)) {
-          // Remove only the tag introduced by archiving, preserving later edits.
-          if (property.key === "tags" && (Array.isArray(frontmatter.tags) || typeof frontmatter.tags === "string") && Array.isArray(property.archivedValue)) {
-            const originalTags = this.readTags(property.value).map((tag) => tag.toLowerCase());
-            const addedTags = this.readTags(property.archivedValue)
-              .filter((tag) => !originalTags.includes(tag.toLowerCase()));
-            const tags = Array.isArray(frontmatter.tags) ? frontmatter.tags : this.readTags(frontmatter.tags);
-            const remaining = tags.filter((tag) =>
-              !addedTags.some((added) => normalizeTag(String(tag))?.toLowerCase() === added.toLowerCase()));
-            frontmatter.tags = typeof frontmatter.tags === "string" ? remaining.join(" ") : remaining;
-          }
-          continue;
-        }
-        if (property.existed) frontmatter[property.key] = cloneValue(property.value);
-        else delete frontmatter[property.key];
+        this.restoreProperty(frontmatter, property);
       }
     });
+  }
+
+  private restoreProperty(frontmatter: Record<string, unknown>, property: ArchivePropertySnapshot): void {
+    if (this.hasDivergedFromArchive(frontmatter, property)) {
+      // The value changed while archived: remove only the tag introduced by
+      // archiving, preserving later edits. Other properties keep user edits.
+      this.removeAddedTags(frontmatter, property);
+      return;
+    }
+    if (property.existed) frontmatter[property.key] = cloneValue(property.value);
+    else delete frontmatter[property.key];
+  }
+
+  private hasDivergedFromArchive(
+    frontmatter: Record<string, unknown>,
+    property: ArchivePropertySnapshot,
+  ): boolean {
+    return Object.prototype.hasOwnProperty.call(property, "archivedValue")
+      && !valuesEqual(frontmatter[property.key], property.archivedValue);
+  }
+
+  private removeAddedTags(frontmatter: Record<string, unknown>, property: ArchivePropertySnapshot): void {
+    if (property.key !== "tags") return;
+    const currentTags = frontmatter.tags;
+    if (!Array.isArray(currentTags) && typeof currentTags !== "string") return;
+    if (!Array.isArray(property.archivedValue)) return;
+    const originalTagSet = new Set(this.readTags(property.value).map((tag) => tag.toLowerCase()));
+    const addedTagSet = new Set(
+      this.readTags(property.archivedValue)
+        .filter((tag) => !originalTagSet.has(tag.toLowerCase()))
+        .map((tag) => tag.toLowerCase()),
+    );
+    if (addedTagSet.size === 0) return;
+    const tags = Array.isArray(currentTags) ? currentTags : this.readTags(currentTags);
+    const remaining = tags.filter(
+      (tag) => !addedTagSet.has(normalizeTag(String(tag))?.toLowerCase() ?? ""),
+    );
+    frontmatter.tags = typeof currentTags === "string" ? remaining.join(" ") : remaining;
   }
 
   private getHistory(): ArchiveRecord[] {
