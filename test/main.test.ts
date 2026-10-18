@@ -49,6 +49,12 @@ class MockFile extends MockAbstractFile {
   }
 }
 
+class MockExternalFile extends MockFile {
+  getRealPath() {
+    return `/external/${this.path}`;
+  }
+}
+
 class MockPlugin {
   app: TestApp;
   cleanups: Cleanup[] = [];
@@ -150,7 +156,7 @@ mock.module("obsidian", () => ({
   normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/"),
 }));
 
-const { default: IntegratedArchivePlugin, BULK_CONFIRM_THRESHOLD, needsBulkConfirm } = await import("../src/main.ts");
+const { default: IntegratedArchivePlugin, BULK_CONFIRM_THRESHOLD, isExternalFile, needsBulkConfirm } = await import("../src/main.ts");
 
 interface TestApp {
   fileManager: {
@@ -597,4 +603,35 @@ test("rejects archive folder edits overlapping protected paths", async () => {
     .find((item) => item.control?.key === "archiveFolder")!.control!;
   expect(control.validate!("Private/Archive")).toBe("Protected paths overlap the archive folder.");
   expect(control.validate!("Archive")).toBeUndefined();
+});
+
+test("detects files outside the vault without importing version-gated API classes", () => {
+  expect(isExternalFile(new MockFile("note.md") as never)).toBe(false);
+  expect(isExternalFile(new MockExternalFile("note.md") as never)).toBe(true);
+});
+
+test("hides archive actions for files outside the vault", async () => {
+  const fixture = makeApp();
+  const external = new MockExternalFile("note.md");
+  fixture.setActive(external);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const titles: string[] = [];
+  const menu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(titles)) };
+  fixture.events.get("workspace:file-menu")?.(menu, external);
+  expect(titles).toEqual([]);
+
+  const multiTitles: string[] = [];
+  const filesMenu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(multiTitles)) };
+  fixture.events.get("workspace:files-menu")?.(filesMenu, [external]);
+  expect(multiTitles).toEqual([]);
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-file");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  expect(check?.(true)).toBe(false);
+
+  expect(await plugin.archive(external as never)).toBe(false);
+  expect(external.path).toBe("note.md");
+  expect(notices).toContain("Cannot archive note.md: files outside the vault are not supported.");
 });

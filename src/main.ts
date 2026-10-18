@@ -66,6 +66,13 @@ export function needsBulkConfirm(count: number, threshold = BULK_CONFIRM_THRESHO
   return count > threshold;
 }
 
+export function isExternalFile(file: TFile): boolean {
+  // TExternalFile (Obsidian 1.14.4+) extends TFile and adds getRealPath().
+  // Duck-type the capability instead of importing the class so this keeps
+  // working on older app versions where the export does not exist.
+  return typeof (file as { getRealPath?: unknown }).getRealPath === "function";
+}
+
 class ConfirmBulkModal extends Modal {
   private resolve?: (confirmed: boolean) => void;
 
@@ -148,7 +155,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       name: "Archive current file",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || this.isArchived(file) || this.archiveManager.isExcludedPath(file.path)) return false;
+        if (!file || !this.isVaultFile(file) || this.isArchived(file) || this.archiveManager.isExcludedPath(file.path)) return false;
         if (!checking) void this.archive(file);
         return true;
       },
@@ -159,7 +166,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       name: "Restore current file from archive",
       checkCallback: (checking) => {
         const file = this.app.workspace.getActiveFile();
-        if (!file || !this.isArchived(file)) return false;
+        if (!file || !this.isVaultFile(file) || !this.isArchived(file)) return false;
         if (!checking) void this.restore(file);
         return true;
       },
@@ -201,7 +208,7 @@ export default class IntegratedArchivePlugin extends Plugin {
           .onClick(() => void this.archiveMany(files)));
         return;
       }
-      if (!(file instanceof TFile)) return;
+      if (!this.isVaultFile(file)) return;
       if (this.isArchived(file)) {
         menu.addItem((item) => item
           .setTitle("Restore from archive")
@@ -219,8 +226,8 @@ export default class IntegratedArchivePlugin extends Plugin {
 
     this.registerEvent(this.app.workspace.on("files-menu", (menu, files) => {
       if (!this.settings.showArchiveMenu) return;
-      const activeFiles = files.filter((file): file is TFile => file instanceof TFile && !this.isArchived(file) && !this.archiveManager.isExcludedPath(file.path));
-      const archivedFiles = files.filter((file): file is TFile => file instanceof TFile && this.isArchived(file));
+      const activeFiles = files.filter((file): file is TFile => this.isVaultFile(file) && !this.isArchived(file) && !this.archiveManager.isExcludedPath(file.path));
+      const archivedFiles = files.filter((file): file is TFile => this.isVaultFile(file) && this.isArchived(file));
       if (activeFiles.length) {
         menu.addItem((item) => item
           .setTitle(`Archive ${activeFiles.length} ${activeFiles.length === 1 ? "file" : "files"}`)
@@ -246,7 +253,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       choose: (file) => new ArchiveDeleteModal(this.app).choose(file),
       getAction: () => this.settings.deleteAction,
       isArchived: (file) => this.isArchived(file),
-      isFile: (file): file is TFile => file instanceof TFile,
+      isFile: (file): file is TFile => this.isVaultFile(file),
     }));
   }
 
@@ -256,6 +263,10 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   async archive(file: TFile): Promise<boolean> {
+    if (isExternalFile(file)) {
+      new Notice(`Cannot archive ${file.name}: files outside the vault are not supported.`);
+      return false;
+    }
     try {
       const result = await this.archiveManager.archive(file);
       this.reportArchiveResult(result);
@@ -268,6 +279,10 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   async restore(file: TFile): Promise<boolean> {
+    if (isExternalFile(file)) {
+      new Notice(`Cannot restore ${file.name}: files outside the vault are not supported.`);
+      return false;
+    }
     try {
       const result = await this.archiveManager.restore(file);
       this.reportRestoreResult(result);
@@ -328,8 +343,15 @@ export default class IntegratedArchivePlugin extends Plugin {
     return this.archiveManager.isArchived(file);
   }
 
+  private isVaultFile(file: TAbstractFile): file is TFile {
+    // External files (Obsidian 1.14.4+) live outside the vault, so none of
+    // the vault-relative archive, restore, or trash handling applies to them.
+    return file instanceof TFile && !isExternalFile(file);
+  }
+
   private activeFolder(): TFolder | null {
     const file = this.app.workspace.getActiveFile();
+    if (file && !this.isVaultFile(file)) return null;
     const folder = file?.parent ?? null;
     if (!folder || this.archiveManager.isArchivedPath(folder.path)) return null;
     // Guard the vault root: archiving "current folder" at the root would
