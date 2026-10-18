@@ -2,11 +2,16 @@
 
 All notable changes to Integrated Archive are documented here.
 
-## Unreleased
+## 0.5.0 — 2026-10-18
 
 ### Added
 
 - Optionally delete folders that become empty after archiving ("Clean up empty folders" under Archiving settings). The vault root, the archive folder, and protected paths are never deleted.
+- Ignore files outside the vault (Obsidian 1.14.4 external files) across archive, restore, menus, commands, and delete interception.
+
+### Changed
+
+- Updated dev dependencies: `obsidian` (1.14.4), `eslint` (10.13.0), `@types/bun` (1.4.3), and `@types/node` (26.6.5). Aligned the package manager with bun 1.4.3 and the nested `obsidian` copy with 1.14.4.
 
 ### Fixed
 
@@ -14,6 +19,10 @@ All notable changes to Integrated Archive are documented here.
 - Restores of new archive records preserve subsequent metadata edits and remove only the archive tag added by the plugin.
 - Multi-file archive menus exclude protected files.
 - Archive folder edits reject overlaps with protected paths.
+
+### Security
+
+- Pinned the transitive `obsidian` copy to 1.14.4 so no `moment` below the patched 2.31.0 remains in the dependency tree (GHSA-4p3w-j4w9-5jqw).
 
 ## 0.4.0 — 2026-10-05
 
