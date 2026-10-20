@@ -2,6 +2,12 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.5.1 — 2026-10-20
+
+### Fixed
+
+- Defer archive operations, delete prompts, and bulk confirmations until the workspace layout is ready, fixing a flash of a box over the loading screen when Obsidian opens. Modal content is now built in `onOpen` so no DOM is touched before the modal is shown.
+
 ## 0.5.0 — 2026-10-18
 
 ### Added
