@@ -33,18 +33,28 @@ const createMoment = moment as unknown as (timestamp: number) => { format(patter
 class ArchiveDeleteModal extends Modal {
   private resolve?: (choice: DeleteChoice) => void;
 
-  choose(file: TFile): Promise<DeleteChoice> {
+  constructor(app: App, private readonly file: TFile) {
+    super(app);
+  }
+
+  choose(): Promise<DeleteChoice> {
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+      this.open();
+    });
+  }
+
+  onOpen(): void {
+    // Build UI here (rather than in choose()) so nothing touches the DOM
+    // until Obsidian actually opens the modal. Building content earlier
+    // risks attaching DOM while the loading splash is still visible.
     this.setTitle("Archive or delete?");
-    this.contentEl.createEl("p", { text: `What would you like to do with “${file.name}”?` });
+    this.contentEl.createEl("p", { text: `What would you like to do with “${this.file.name}”?` });
     this.contentEl.createEl("p", { text: "Delete follows your Obsidian trash setting and may be permanent." });
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish("cancel")))
       .addButton((button) => button.setButtonText("Delete").setDestructive().onClick(() => this.finish("delete")))
       .addButton((button) => button.setButtonText("Archive").setCta().onClick(() => this.finish("archive")));
-    return new Promise((resolve) => {
-      this.resolve = resolve;
-      this.open();
-    });
   }
 
   private finish(choice: DeleteChoice): void {
@@ -81,15 +91,20 @@ class ConfirmBulkModal extends Modal {
   }
 
   choose(): Promise<boolean> {
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+      this.open();
+    });
+  }
+
+  onOpen(): void {
+    // See ArchiveDeleteModal: build UI on open so no DOM is touched before
+    // the modal is actually shown (e.g. over the startup splash).
     this.setTitle(this.title);
     this.contentEl.createEl("p", { text: this.message });
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish(false)))
       .addButton((button) => button.setButtonText("Continue").setCta().onClick(() => this.finish(true)));
-    return new Promise((resolve) => {
-      this.resolve = resolve;
-      this.open();
-    });
   }
 
   private finish(confirmed: boolean): void {
@@ -109,9 +124,25 @@ export default class IntegratedArchivePlugin extends Plugin {
   settings: ArchiveData = DEFAULT_DATA;
   private archiveManager!: ArchiveManager<TFile>;
   private settingTab!: ArchiveSettingTab;
+  private layoutReadyPromise: Promise<void> = Promise.resolve();
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    // Resolve once the workspace layout is ready. Deletion prompts, archive
+    // modals, and their Notices must wait for this: opening them while the
+    // startup splash is still visible flashes a box over the loading screen,
+    // and mutating the vault before layout is ready risks racing startup.
+    this.layoutReadyPromise = new Promise<void>((resolve) => {
+      const workspace = this.app.workspace as unknown as {
+        layoutReady?: boolean;
+        onLayoutReady?: (callback: () => unknown) => void;
+      };
+      if (!workspace || workspace.layoutReady || typeof workspace.onLayoutReady !== "function") {
+        resolve();
+      } else {
+        workspace.onLayoutReady(() => resolve());
+      }
+    });
     const host: ArchiveHost<TFile> = {
       createFolder: (path) => this.app.vault.createFolder(path).then(() => undefined),
       deleteFolder: async (path) => {
@@ -249,12 +280,26 @@ export default class IntegratedArchivePlugin extends Plugin {
     }));
 
     this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
-      archive: (file) => this.archive(file),
-      choose: (file) => new ArchiveDeleteModal(this.app).choose(file),
+      archive: (file) => this.archiveWhenReady(file),
+      choose: (file) => this.chooseWhenReady(file),
       getAction: () => this.settings.deleteAction,
       isArchived: (file) => this.isArchived(file),
       isFile: (file): file is TFile => this.isVaultFile(file),
     }));
+  }
+
+  private waitForLayoutReady(): Promise<void> {
+    return this.layoutReadyPromise;
+  }
+
+  private async archiveWhenReady(file: TFile): Promise<boolean> {
+    await this.waitForLayoutReady();
+    return this.archive(file);
+  }
+
+  private async chooseWhenReady(file: TFile): Promise<DeleteChoice> {
+    await this.waitForLayoutReady();
+    return new ArchiveDeleteModal(this.app, file).choose();
   }
 
   async onExternalSettingsChange(): Promise<void> {
@@ -297,6 +342,7 @@ export default class IntegratedArchivePlugin extends Plugin {
   private async archiveMany(files: TFile[]): Promise<void> {
     if (!files.length) return;
     if (needsBulkConfirm(files.length)) {
+      await this.waitForLayoutReady();
       const noun = files.length === 1 ? "file" : "files";
       const confirmed = await new ConfirmBulkModal(
         this.app,
@@ -314,6 +360,7 @@ export default class IntegratedArchivePlugin extends Plugin {
   private async restoreMany(files: TFile[]): Promise<void> {
     if (!files.length) return;
     if (needsBulkConfirm(files.length)) {
+      await this.waitForLayoutReady();
       const noun = files.length === 1 ? "file" : "files";
       const confirmed = await new ConfirmBulkModal(
         this.app,

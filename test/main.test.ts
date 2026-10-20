@@ -110,7 +110,9 @@ class MockModal {
   };
   constructor(public app: TestApp) {}
   close() {}
-  open() {}
+  open() {
+    (this as unknown as { onOpen?: () => void }).onOpen?.();
+  }
   setTitle() {}
 }
 
@@ -177,7 +179,9 @@ interface TestApp {
   };
   workspace: {
     getActiveFile(): MockFile | null;
+    layoutReady: boolean;
     on(name: string, callback: EventCallback): { cleanup: Cleanup };
+    onLayoutReady(callback: () => void): void;
   };
 }
 
@@ -187,6 +191,8 @@ function makeApp() {
   const folders = new Set<string>();
   const trashed: string[] = [];
   let activeFile: MockFile | null = null;
+  let layoutReady = true;
+  const layoutReadyCallbacks: Array<() => void> = [];
   const app: TestApp = {
     loadedData: null,
     savedData: null,
@@ -231,9 +237,16 @@ function makeApp() {
     },
     workspace: {
       getActiveFile: () => activeFile,
+      get layoutReady() {
+        return layoutReady;
+      },
       on(name, callback) {
         events.set(`workspace:${name}`, callback);
         return { cleanup: () => events.delete(`workspace:${name}`) };
+      },
+      onLayoutReady(callback) {
+        if (layoutReady) callback();
+        else layoutReadyCallbacks.push(callback);
       },
     },
   };
@@ -246,6 +259,13 @@ function makeApp() {
     setActive(file: MockFile | null) {
       activeFile = file;
       if (file) entries.set(file.path, file);
+    },
+    setLayoutReady(ready: boolean) {
+      layoutReady = ready;
+      if (ready) {
+        const pending = layoutReadyCallbacks.splice(0);
+        for (const callback of pending) callback();
+      }
     },
     trashed,
   };
@@ -455,6 +475,54 @@ test("cancels deletion and leaves the file in place", async () => {
 
   expect(await result).toBe(false);
   expect(file.path).toBe("note.md");
+});
+
+test("defers the delete prompt until layout is ready", async () => {
+  const fixture = makeApp();
+  fixture.setLayoutReady(false);
+  fixture.app.loadedData = { deleteAction: "ask" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const result = fixture.app.fileManager.promptForDeletion(file);
+  await Bun.sleep(10);
+
+  // No modal may open over the startup splash.
+  expect(modalButtons.length).toBe(0);
+
+  fixture.setLayoutReady(true);
+  await Bun.sleep(10);
+  expect(modalButtons.length).toBeGreaterThan(0);
+  clickModalButton("Archive");
+
+  expect(await result).toBe(false);
+  expect(file.path).toBe("Archive/note.md");
+  expect(fixture.trashed).toEqual([]);
+});
+
+test("defers automatic archiving until layout is ready", async () => {
+  const fixture = makeApp();
+  fixture.setLayoutReady(false);
+  fixture.app.loadedData = { deleteAction: "archive" };
+  const file = new MockFile("note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const pending = fixture.app.fileManager.trashFile(file);
+  await Bun.sleep(10);
+
+  // The vault must stay untouched while the loading screen is visible.
+  expect(file.path).toBe("note.md");
+  expect(fixture.trashed).toEqual([]);
+
+  fixture.setLayoutReady(true);
+  await pending;
+
+  expect(file.path).toBe("Archive/note.md");
+  expect(fixture.trashed).toEqual([]);
 });
 
 test("archives every eligible file through the folder command", async () => {
