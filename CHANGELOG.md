@@ -2,6 +2,18 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.6.0 — 2026-11-02
+
+### Added
+
+- Optionally archive a note's linked attachments (images, PDFs, and other non-note files) together with it ("Archive linked attachments" under Archiving settings, off by default). Linked notes are never included; attachments already in the archive or in protected paths are skipped.
+- Optionally include attachments linked from other notes ("Include shared attachments"); otherwise shared attachments stay in place.
+- Restoring or undoing a note archived with attachments restores its attachments together, including in bulk archive and restore.
+
+### Changed
+
+- Updated dev dependencies: `@types/bun` (1.4.4) and `@types/node` (26.6.6).
+
 ## 0.5.1 — 2026-10-20
 
 ### Fixed
