@@ -170,7 +170,7 @@ interface TestApp {
   };
   loadedData: unknown;
   metadataCache: {
-    getFileCache(file: MockFile): { frontmatter: Record<string, unknown> } | null;
+    getFileCache(file: MockFile): { frontmatter: Record<string, unknown>; links?: Array<{ link: string }>; embeds?: Array<{ link: string }> } | null;
     getFirstLinkpathDest(linkpath: string, sourcePath: string): MockFile | null;
     resolvedLinks: Record<string, Record<string, number>>;
   };
@@ -178,6 +178,7 @@ interface TestApp {
   vault: {
     createFolder(path: string): Promise<void>;
     getAbstractFileByPath(path: string): MockAbstractFile | null;
+    getMarkdownFiles(): MockFile[];
     on(name: string, callback: EventCallback): { cleanup: Cleanup };
   };
   workspace: {
@@ -235,6 +236,7 @@ function makeApp() {
         entries.set(path, new MockAbstractFile(path, path.slice(path.lastIndexOf("/") + 1)));
       },
       getAbstractFileByPath: (path) => entries.get(path) ?? null,
+      getMarkdownFiles: () => [...entries.values()].filter((entry): entry is MockFile => entry instanceof MockFile && entry.extension === "md"),
       on(name, callback) {
         events.set(`vault:${name}`, callback);
         return { cleanup: () => events.delete(`vault:${name}`) };
@@ -798,4 +800,72 @@ test("exposes the attachment settings", async () => {
   const keys = tab.getSettingDefinitions().flatMap((group) => group.items.map((item) => item.control?.key));
   expect(keys).toContain("archiveAttachments");
   expect(keys).toContain("includeSharedAttachments");
+});
+
+
+test("batch selection keeps an already selected attachment in the note restore group", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const note = new MockFile("Projects/note.md");
+  const image = new MockFile("Projects/image.png");
+  fixture.entries.set(note.path, note);
+  fixture.entries.set(image.path, image);
+  fixture.app.metadataCache.resolvedLinks = { [note.path]: { [image.path]: 1 } };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  await (plugin as unknown as { archiveMany(files: MockFile[]): Promise<void> }).archiveMany([image, note]);
+  expect(plugin.settings.archiveHistory[0]?.groupId).toBeTruthy();
+  expect(plugin.settings.archiveHistory[0]?.groupId).toBe(plugin.settings.archiveHistory[1]?.groupId);
+  expect(await plugin.restore(note as never)).toBe(true);
+  expect(image.path).toBe("Projects/image.png");
+});
+
+test("cached links protect shared attachments missing from the resolved index", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const note = new MockFile("note.md");
+  const other = new MockFile("other.md");
+  const image = new MockFile("image.png");
+  for (const file of [note, other, image]) fixture.entries.set(file.path, file);
+  fixture.app.metadataCache.resolvedLinks = { [note.path]: { [image.path]: 1 } };
+  fixture.app.metadataCache.getFileCache = (file) => ({ frontmatter: file.frontmatter, embeds: file === other ? [{ link: "image.png" }] : [] });
+  fixture.app.metadataCache.getFirstLinkpathDest = (link) => link === image.path ? image : null;
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect(await plugin.archive(note as never)).toBe(true);
+  expect(image.path).toBe("image.png");
+});
+
+test("batch leaves shared attachments in place and counts each once", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const first = new MockFile("first.md");
+  const second = new MockFile("second.md");
+  const image = new MockFile("image.png");
+  for (const file of [first, second, image]) fixture.entries.set(file.path, file);
+  fixture.app.metadataCache.resolvedLinks = {
+    [first.path]: { [image.path]: 1 },
+    [second.path]: { [image.path]: 1 },
+  };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  await (plugin as unknown as { archiveMany(files: MockFile[]): Promise<void> }).archiveMany([first, second]);
+  expect(image.path).toBe("image.png");
+  expect(notices).toContain("Archived 2 files. 1 shared attachment left in place.");
+});
+
+test("missing link caches conservatively leave attachments in place", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const note = new MockFile("note.md");
+  const image = new MockFile("image.png");
+  fixture.entries.set(note.path, note);
+  fixture.entries.set("other.md", new MockFile("other.md"));
+  fixture.entries.set(image.path, image);
+  fixture.app.metadataCache.resolvedLinks = { [note.path]: { [image.path]: 1 } };
+  fixture.app.metadataCache.getFileCache = () => null;
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect(await plugin.archive(note as never)).toBe(true);
+  expect(image.path).toBe("image.png");
 });

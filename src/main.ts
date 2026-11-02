@@ -375,7 +375,7 @@ export default class IntegratedArchivePlugin extends Plugin {
     const items = [...files];
     const groups = new Map<string, string>();
     const seen = new Set(files.map((file) => file.path));
-    let sharedSkipped = 0;
+    const sharedSkipped = new Set<string>();
     for (const file of files) {
       let plan: AttachmentPlan<TFile>;
       try {
@@ -383,18 +383,19 @@ export default class IntegratedArchivePlugin extends Plugin {
       } catch {
         continue;
       }
-      sharedSkipped += plan.sharedSkipped.length;
+      for (const path of plan.sharedSkipped) sharedSkipped.add(path);
       if (!plan.attachments.length) continue;
       const groupId = this.archiveManager.makeGroupId(file.path);
       groups.set(file.path, groupId);
       for (const attachment of plan.attachments) {
+        if (!groups.has(attachment.path)) groups.set(attachment.path, groupId);
         if (seen.has(attachment.path)) continue;
         seen.add(attachment.path);
         groups.set(attachment.path, groupId);
         items.push(attachment);
       }
     }
-    return { groups, items, sharedSkipped };
+    return { groups, items, sharedSkipped: sharedSkipped.size };
   }
 
   private async restoreMany(files: TFile[]): Promise<void> {
@@ -485,6 +486,16 @@ export default class IntegratedArchivePlugin extends Plugin {
     for (const [source, destinations] of Object.entries(resolved)) {
       if (destinations && Object.prototype.hasOwnProperty.call(destinations, destPath)) referrers.push(source);
     }
+    // The resolved index can lag behind per-file caches after edits.
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (referrers.includes(file.path)) continue;
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (!cache) throw new Error("Link cache is not ready.");
+      const refs = [...(cache.links ?? []), ...(cache.embeds ?? [])];
+      if (refs.some((ref) => this.app.metadataCache.getFirstLinkpathDest(getLinkpath(ref.link), file.path)?.path === destPath)) {
+        referrers.push(file.path);
+      }
+    }
     return referrers;
   }
 
@@ -516,17 +527,6 @@ export default class IntegratedArchivePlugin extends Plugin {
 
   private async loadSettings(): Promise<void> {
     this.settings = sanitizeData(await this.loadData());
-  }
-
-  private reportArchiveResult(result: Awaited<ReturnType<ArchiveManager<TFile>["archive"]>>): void {
-    if (result.metadataError) console.error("Integrated Archive metadata:", result.metadataError);
-    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
-    if (result.metadataError || result.historyError) {
-      const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
-      new Notice(`Archived to ${result.destination}, but ${failed} could not be updated.`);
-    } else {
-      new Notice(`Archived to ${result.destination}`);
-    }
   }
 
   private reportArchiveGroupResult(result: ArchiveGroupResult): void {
