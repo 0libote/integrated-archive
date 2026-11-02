@@ -9,10 +9,11 @@ import {
   TAbstractFile,
   TFile,
   TFolder,
+  getLinkpath,
   moment,
   normalizePath,
 } from "obsidian";
-import { ArchiveManager, type ArchiveHost } from "./archive";
+import { ArchiveManager, type ArchiveGroupResult, type ArchiveHost, type AttachmentPlan, type RestoreGroupResult } from "./archive";
 import { runBatch } from "./batch";
 import { installDeletionInterceptor, type DeleteChoice } from "./delete";
 import {
@@ -168,6 +169,8 @@ export default class IntegratedArchivePlugin extends Plugin {
         return entry.children.map((child) => child.path);
       },
       getFrontmatter: (file) => Promise.resolve(this.app.metadataCache.getFileCache(file)?.frontmatter),
+      listIncomingLinks: (destPath) => this.collectIncomingLinks(destPath),
+      listOutgoingLinks: (sourcePath) => this.collectOutgoingLinks(sourcePath),
       normalizePath,
       now: Date.now,
       processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
@@ -313,8 +316,8 @@ export default class IntegratedArchivePlugin extends Plugin {
       return false;
     }
     try {
-      const result = await this.archiveManager.archive(file);
-      this.reportArchiveResult(result);
+      const result = await this.archiveManager.archiveWithAttachments(file);
+      this.reportArchiveGroupResult(result);
       return true;
     } catch (error) {
       console.error("Integrated Archive:", error);
@@ -329,8 +332,8 @@ export default class IntegratedArchivePlugin extends Plugin {
       return false;
     }
     try {
-      const result = await this.archiveManager.restore(file);
-      this.reportRestoreResult(result);
+      const result = await this.archiveManager.restoreWithGroup(file);
+      this.reportRestoreGroupResult(result);
       return true;
     } catch (error) {
       console.error("Integrated Archive restore:", error);
@@ -341,45 +344,105 @@ export default class IntegratedArchivePlugin extends Plugin {
 
   private async archiveMany(files: TFile[]): Promise<void> {
     if (!files.length) return;
-    if (needsBulkConfirm(files.length)) {
+    const expanded = await this.expandWithAttachments(files);
+    if (needsBulkConfirm(expanded.items.length)) {
       await this.waitForLayoutReady();
-      const noun = files.length === 1 ? "file" : "files";
+      const noun = expanded.items.length === 1 ? "file" : "files";
       const confirmed = await new ConfirmBulkModal(
         this.app,
-        `Archive ${files.length} ${noun}?`,
-        `This will archive ${files.length} ${noun}. Continue?`,
+        `Archive ${expanded.items.length} ${noun}?`,
+        `This will archive ${expanded.items.length} ${noun}. Continue?`,
       ).choose();
       if (!confirmed) return;
     }
-    const result = await runBatch(files, (file) => this.archiveManager.archive(file));
+    const result = await runBatch(expanded.items, (file) =>
+      this.archiveManager.archive(file, { groupId: expanded.groups.get(file.path) }));
     for (const failure of result.failed) console.error(`Integrated Archive ${failure.item.path}:`, failure.error);
     const warnings = result.succeeded.filter(({ result: item }) => item.metadataError || item.historyError).length;
-    new Notice(this.batchNotice("Archived", result.succeeded.length, result.failed.length, warnings));
+    let message = this.batchNotice("Archived", result.succeeded.length, result.failed.length, warnings);
+    if (expanded.sharedSkipped > 0) {
+      message += ` ${expanded.sharedSkipped} shared ${expanded.sharedSkipped === 1 ? "attachment" : "attachments"} left in place.`;
+    }
+    new Notice(message);
+  }
+
+  /**
+   * Expand a file list with exclusively-used attachments so batch archiving
+   * moves each note together with its attachments. Attachments share their
+   * note's group id so restoring the note brings them back.
+   */
+  private async expandWithAttachments(files: TFile[]): Promise<{ groups: Map<string, string>; items: TFile[]; sharedSkipped: number }> {
+    const items = [...files];
+    const groups = new Map<string, string>();
+    const seen = new Set(files.map((file) => file.path));
+    const sharedSkipped = new Set<string>();
+    for (const file of files) {
+      let plan: AttachmentPlan<TFile>;
+      try {
+        plan = await this.archiveManager.collectAttachments(file);
+      } catch {
+        continue;
+      }
+      for (const path of plan.sharedSkipped) sharedSkipped.add(path);
+      if (!plan.attachments.length) continue;
+      const groupId = this.archiveManager.makeGroupId(file.path);
+      groups.set(file.path, groupId);
+      for (const attachment of plan.attachments) {
+        if (!groups.has(attachment.path)) groups.set(attachment.path, groupId);
+        if (seen.has(attachment.path)) continue;
+        seen.add(attachment.path);
+        groups.set(attachment.path, groupId);
+        items.push(attachment);
+      }
+    }
+    return { groups, items, sharedSkipped: sharedSkipped.size };
   }
 
   private async restoreMany(files: TFile[]): Promise<void> {
     if (!files.length) return;
-    if (needsBulkConfirm(files.length)) {
+    const items = this.expandWithGroupMembers(files);
+    if (needsBulkConfirm(items.length)) {
       await this.waitForLayoutReady();
-      const noun = files.length === 1 ? "file" : "files";
+      const noun = items.length === 1 ? "file" : "files";
       const confirmed = await new ConfirmBulkModal(
         this.app,
-        `Restore ${files.length} ${noun}?`,
-        `This will restore ${files.length} ${noun} to their original locations. Continue?`,
+        `Restore ${items.length} ${noun}?`,
+        `This will restore ${items.length} ${noun} to their original locations. Continue?`,
       ).choose();
       if (!confirmed) return;
     }
-    const result = await runBatch(files, (file) => this.archiveManager.restore(file));
+    const result = await runBatch(items, (file) => this.archiveManager.restore(file));
     for (const failure of result.failed) console.error(`Integrated Archive restore ${failure.item.path}:`, failure.error);
     const warnings = result.succeeded.filter(({ result: item }) =>
       item.historyError || item.metadataError || item.inferredOriginalPath).length;
     new Notice(this.batchNotice("Restored", result.succeeded.length, result.failed.length, warnings));
   }
 
+  /**
+   * Expand selected archived files with fellow group members so a note
+   * restore also brings back attachments archived with it.
+   */
+  private expandWithGroupMembers(files: TFile[]): TFile[] {
+    const items = [...files];
+    const seen = new Set(files.map((file) => file.path));
+    for (const file of files) {
+      const groupId = this.archiveManager.getRecordGroup(file.path);
+      if (!groupId) continue;
+      for (const archivedPath of this.archiveManager.listGroupArchivedPaths(groupId)) {
+        if (seen.has(archivedPath)) continue;
+        const entry = this.app.vault.getAbstractFileByPath(archivedPath);
+        if (!entry || !this.isVaultFile(entry)) continue;
+        seen.add(archivedPath);
+        items.push(entry);
+      }
+    }
+    return items;
+  }
+
   private async undoLastArchive(): Promise<void> {
     try {
-      const result = await this.archiveManager.undoLastArchive();
-      this.reportRestoreResult(result);
+      const result = await this.archiveManager.undoLastArchiveGroup();
+      this.reportRestoreGroupResult(result);
     } catch (error) {
       console.error("Integrated Archive undo:", error);
       new Notice(`Could not undo archive: ${error instanceof Error ? error.message : String(error)}`);
@@ -394,6 +457,46 @@ export default class IntegratedArchivePlugin extends Plugin {
     // External files (Obsidian 1.14.4+) live outside the vault, so none of
     // the vault-relative archive, restore, or trash handling applies to them.
     return file instanceof TFile && !isExternalFile(file);
+  }
+
+  private collectOutgoingLinks(sourcePath: string): string[] {
+    const seen = new Set<string>();
+    const resolved = this.app.metadataCache.resolvedLinks[sourcePath];
+    if (resolved) {
+      for (const destination of Object.keys(resolved)) seen.add(destination);
+    }
+    // resolvedLinks can lag behind edits, so also parse the cached links
+    // directly as a fallback.
+    const entry = this.app.vault.getAbstractFileByPath(sourcePath);
+    if (entry instanceof TFile) {
+      const cache = this.app.metadataCache.getFileCache(entry);
+      const refs = [...(cache?.links ?? []), ...(cache?.embeds ?? [])];
+      for (const ref of refs) {
+        const destination = this.app.metadataCache.getFirstLinkpathDest(getLinkpath(ref.link), sourcePath);
+        if (destination) seen.add(destination.path);
+      }
+    }
+    seen.delete(sourcePath);
+    return [...seen];
+  }
+
+  private collectIncomingLinks(destPath: string): string[] {
+    const referrers: string[] = [];
+    const resolved = this.app.metadataCache.resolvedLinks ?? {};
+    for (const [source, destinations] of Object.entries(resolved)) {
+      if (destinations && Object.prototype.hasOwnProperty.call(destinations, destPath)) referrers.push(source);
+    }
+    // The resolved index can lag behind per-file caches after edits.
+    for (const file of this.app.vault.getMarkdownFiles()) {
+      if (referrers.includes(file.path)) continue;
+      const cache = this.app.metadataCache.getFileCache(file);
+      if (!cache) throw new Error("Link cache is not ready.");
+      const refs = [...(cache.links ?? []), ...(cache.embeds ?? [])];
+      if (refs.some((ref) => this.app.metadataCache.getFirstLinkpathDest(getLinkpath(ref.link), file.path)?.path === destPath)) {
+        referrers.push(file.path);
+      }
+    }
+    return referrers;
   }
 
   private activeFolder(): TFolder | null {
@@ -426,14 +529,33 @@ export default class IntegratedArchivePlugin extends Plugin {
     this.settings = sanitizeData(await this.loadData());
   }
 
-  private reportArchiveResult(result: Awaited<ReturnType<ArchiveManager<TFile>["archive"]>>): void {
-    if (result.metadataError) console.error("Integrated Archive metadata:", result.metadataError);
-    if (result.historyError) console.error("Integrated Archive history:", result.historyError);
-    if (result.metadataError || result.historyError) {
-      const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
-      new Notice(`Archived to ${result.destination}, but ${failed} could not be updated.`);
+  private reportArchiveGroupResult(result: ArchiveGroupResult): void {
+    for (const failure of result.failures) {
+      console.error(`Integrated Archive attachment ${failure.originalPath}:`, failure.error);
+    }
+    const attachmentWarnings = result.attachments.filter((attachment) => attachment.historyError).length;
+    if (result.primary.metadataError) console.error("Integrated Archive metadata:", result.primary.metadataError);
+    if (result.primary.historyError) console.error("Integrated Archive history:", result.primary.historyError);
+    const failed = [result.primary.metadataError && "metadata", result.primary.historyError && "archive history"]
+      .filter(Boolean).join(" and ");
+    const extras: string[] = [];
+    if (result.attachments.length) {
+      extras.push(`+ ${result.attachments.length} ${result.attachments.length === 1 ? "attachment" : "attachments"}`);
+    }
+    if (result.sharedSkipped.length) {
+      extras.push(`${result.sharedSkipped.length} shared ${result.sharedSkipped.length === 1 ? "attachment" : "attachments"} left in place`);
+    }
+    if (result.failures.length) {
+      extras.push(`${result.failures.length} ${result.failures.length === 1 ? "attachment" : "attachments"} failed`);
+    }
+    if (attachmentWarnings) {
+      extras.push(`${attachmentWarnings} completed with warnings`);
+    }
+    const suffix = extras.length ? ` (${extras.join("; ")})` : "";
+    if (failed) {
+      new Notice(`Archived to ${result.primary.destination}${suffix}, but ${failed} could not be updated.`);
     } else {
-      new Notice(`Archived to ${result.destination}`);
+      new Notice(`Archived to ${result.primary.destination}${suffix}`);
     }
   }
 
@@ -442,6 +564,30 @@ export default class IntegratedArchivePlugin extends Plugin {
     const noun = succeeded === 1 ? "file" : "files";
     const suffix = details.length ? `; ${details.join("; ")}` : "";
     return `${verb} ${succeeded} ${noun}${suffix}.`;
+  }
+
+  private reportRestoreGroupResult(result: RestoreGroupResult): void {
+    for (const failure of result.failures) {
+      console.error(`Integrated Archive attachment restore ${failure.originalPath}:`, failure.error);
+    }
+    if (!result.attachments.length && !result.failures.length) {
+      this.reportRestoreResult(result.primary);
+      return;
+    }
+    const failed = [result.primary.metadataError && "metadata", result.primary.historyError && "archive history"]
+      .filter(Boolean).join(" and ");
+    if (result.primary.metadataError) console.error("Integrated Archive metadata restore:", result.primary.metadataError);
+    if (result.primary.historyError) console.error("Integrated Archive history:", result.primary.historyError);
+    const extras: string[] = [];
+    if (result.attachments.length) {
+      extras.push(`${result.attachments.length} ${result.attachments.length === 1 ? "attachment" : "attachments"}`);
+    }
+    if (result.failures.length) {
+      extras.push(`${result.failures.length} failed`);
+    }
+    const destinations = [result.primary.destination, ...result.attachments.map((item) => item.destination)].join(", ");
+    const suffix = failed ? `, but ${failed} could not be updated.` : ".";
+    new Notice(`Restored ${extras.join(", ")} to ${destinations}${suffix}`);
   }
 
   private reportRestoreResult(result: Awaited<ReturnType<ArchiveManager<TFile>["restore"]>>): void {
@@ -482,6 +628,13 @@ class ArchiveSettingTab extends PluginSettingTab {
           },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           { name: "Clean up empty folders", desc: "Delete folders that become empty after archiving. Never deletes the vault root, the archive folder, or protected paths.", control: { type: "toggle", key: "cleanEmptyFolders" } },
+          { name: "Archive linked attachments", desc: "When archiving a Markdown note, also archive images, PDFs, and other files it links to. Linked notes are never included.", control: { type: "toggle", key: "archiveAttachments" } },
+          {
+            name: "Include shared attachments",
+            desc: "Also archive attachments linked from other notes. When off, attachments used elsewhere stay in place.",
+            visible: () => s.archiveAttachments,
+            control: { type: "toggle", key: "includeSharedAttachments" },
+          },
           {
             name: "When deleting",
             desc: "Choose what happens to files outside the archive. Folders and archived files always use Obsidian’s normal delete flow.",

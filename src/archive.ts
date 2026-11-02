@@ -30,6 +30,8 @@ export interface ArchiveHost<File extends ArchiveFile> {
   getFile(path: string): File | null;
   getFolderChildren(path: string): string[] | null;
   getFrontmatter(file: File): Promise<Record<string, unknown> | undefined>;
+  listIncomingLinks(destPath: string): string[];
+  listOutgoingLinks(sourcePath: string): string[];
   normalizePath(path: string): string;
   now(): number;
   processFrontMatter(file: File, update: (frontmatter: Record<string, unknown>) => void): Promise<void>;
@@ -43,6 +45,41 @@ export interface ArchiveResult {
   historyError?: unknown;
   metadataError?: unknown;
   originalPath: string;
+}
+
+export interface ArchivedAttachment {
+  destination: string;
+  historyError?: unknown;
+  originalPath: string;
+}
+
+export interface AttachmentFailure {
+  error: unknown;
+  originalPath: string;
+}
+
+export interface AttachmentPlan<T extends ArchiveFile> {
+  attachments: T[];
+  sharedSkipped: string[];
+}
+
+export interface ArchiveGroupResult {
+  attachments: ArchivedAttachment[];
+  failures: AttachmentFailure[];
+  groupId?: string;
+  primary: ArchiveResult;
+  sharedSkipped: string[];
+}
+
+export interface RestoreGroupResult {
+  attachments: RestoreResult[];
+  failures: AttachmentFailure[];
+  groupId?: string;
+  primary: RestoreResult;
+}
+
+export interface ArchiveOptions {
+  groupId?: string;
 }
 
 export interface RestoreResult {
@@ -75,12 +112,20 @@ export class ArchiveManager<File extends ArchiveFile> {
       .some((excluded) => isPathInFolder(path, excluded));
   }
 
-  archive(file: File): Promise<ArchiveResult> {
-    return this.enqueue(() => this.archiveNow(file));
+  archive(file: File, options?: ArchiveOptions): Promise<ArchiveResult> {
+    return this.enqueue(() => this.archiveNow(file, options?.groupId));
+  }
+
+  archiveWithAttachments(file: File): Promise<ArchiveGroupResult> {
+    return this.enqueue(() => this.archiveGroupNow(file));
   }
 
   restore(file: File): Promise<RestoreResult> {
     return this.enqueue(() => this.restoreNow(file));
+  }
+
+  restoreWithGroup(file: File): Promise<RestoreGroupResult> {
+    return this.enqueue(() => this.restoreGroupNow(file));
   }
 
   reconcileRename(oldPath: string, newPath: string): Promise<void> {
@@ -100,11 +145,97 @@ export class ArchiveManager<File extends ArchiveFile> {
     });
   }
 
+  undoLastArchiveGroup(): Promise<RestoreGroupResult> {
+    return this.enqueue(async () => {
+      const history = this.getHistory();
+      for (let index = history.length - 1; index >= 0; index--) {
+        const record = history[index];
+        if (!record) continue;
+        const file = this.host.getFile(record.archivedPath);
+        if (!file) continue;
+        if (!record.groupId) {
+          return { attachments: [], failures: [], groupId: undefined, primary: await this.restoreNow(file) };
+        }
+        // Restore the group starting from its oldest available member so the
+        // note (archived first) is the primary result.
+        const members = history.filter((item) => item.groupId === record.groupId);
+        for (const member of members) {
+          const memberFile = this.host.getFile(member.archivedPath);
+          if (memberFile) return this.restoreGroupFromRecord(memberFile, record.groupId);
+        }
+      }
+      throw new Error("There is no archived file to restore.");
+    });
+  }
+
+  makeGroupId(sourcePath: string): string {
+    return `${this.host.now()}:${sourcePath}`;
+  }
+
+  getRecordGroup(archivedPath: string): string | undefined {
+    return this.getHistory().find((record) => record.archivedPath === archivedPath)?.groupId;
+  }
+
+  listGroupArchivedPaths(groupId: string): string[] {
+    if (!groupId) return [];
+    return this.getHistory()
+      .filter((record) => record.groupId === groupId)
+      .map((record) => record.archivedPath);
+  }
+
+  async collectAttachments(file: File): Promise<AttachmentPlan<File>> {
+    const attachments: File[] = [];
+    const sharedSkipped: string[] = [];
+    const settings = this.getSettings();
+    if (!settings.archiveAttachments) return { attachments, sharedSkipped };
+    if (file.extension !== "md") return { attachments, sharedSkipped };
+
+    let outgoing: string[];
+    try {
+      outgoing = this.host.listOutgoingLinks(file.path);
+    } catch {
+      return { attachments, sharedSkipped };
+    }
+    const seen = new Set<string>([file.path]);
+    for (const destination of outgoing) {
+      if (seen.has(destination)) continue;
+      seen.add(destination);
+      const candidate = this.host.getFile(destination);
+      if (!candidate || candidate.path === file.path) continue;
+      // Linked notes stay notes: only non-note files travel with the note.
+      if (candidate.extension === "md" || candidate.extension === "canvas") continue;
+      if (this.isArchivedPath(candidate.path)) continue;
+      if (this.isExcludedPath(candidate.path)) continue;
+      if (!settings.includeSharedAttachments && this.isSharedAttachment(candidate.path, file.path)) {
+        sharedSkipped.push(candidate.path);
+        continue;
+      }
+      attachments.push(candidate);
+    }
+    return { attachments, sharedSkipped };
+  }
+
+  private isSharedAttachment(destination: string, sourcePath: string): boolean {
+    let referrers: string[];
+    try {
+      referrers = this.host.listIncomingLinks(destination);
+    } catch {
+      // Without a link index we cannot prove exclusivity, so keep the file.
+      return true;
+    }
+    for (const referrer of referrers) {
+      if (referrer === sourcePath) continue;
+      if (this.isArchivedPath(referrer)) continue;
+      if (this.host.getFile(referrer)) return true;
+    }
+    return false;
+  }
+
   canUndo(): boolean {
     return this.getHistory().some((record) => !!this.host.getFile(record.archivedPath));
   }
 
-  private async archiveNow(file: File): Promise<ArchiveResult> {
+  private async archiveNow(file: File, groupId?: string): Promise<ArchiveResult> {
     const archiveFolder = this.archiveFolder();
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
     if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
@@ -133,7 +264,7 @@ export class ArchiveManager<File extends ArchiveFile> {
 
     let historyError: unknown;
     try {
-      await this.addHistory({ archivedAt, archivedPath: destination, metadata, originalPath });
+      await this.addHistory({ archivedAt, archivedPath: destination, metadata, originalPath, ...(groupId ? { groupId } : {}) });
     } catch (error) {
       historyError = error;
     }
@@ -141,6 +272,63 @@ export class ArchiveManager<File extends ArchiveFile> {
     const cleanedFolders = await this.cleanupEmptyParents(originalPath);
 
     return { cleanedFolders, destination, historyError, metadataError, originalPath };
+  }
+
+  private async archiveGroupNow(file: File): Promise<ArchiveGroupResult> {
+    const plan = await this.collectAttachments(file);
+    if (!plan.attachments.length) {
+      return {
+        attachments: [],
+        failures: [],
+        groupId: undefined,
+        primary: await this.archiveNow(file),
+        sharedSkipped: plan.sharedSkipped,
+      };
+    }
+    const groupId = this.makeGroupId(file.path);
+    const primary = await this.archiveNow(file, groupId);
+    const attachments: ArchivedAttachment[] = [];
+    const failures: AttachmentFailure[] = [];
+    for (const attachment of plan.attachments) {
+      const current = this.host.getFile(attachment.path);
+      if (!current) {
+        failures.push({ error: new Error(`${attachment.path} is no longer available.`), originalPath: attachment.path });
+        continue;
+      }
+      try {
+        const result = await this.archiveNow(current, groupId);
+        attachments.push({ destination: result.destination, historyError: result.historyError, originalPath: result.originalPath });
+      } catch (error) {
+        failures.push({ error, originalPath: current.path });
+      }
+    }
+    return { attachments, failures, groupId, primary, sharedSkipped: plan.sharedSkipped };
+  }
+
+  private async restoreGroupNow(file: File): Promise<RestoreGroupResult> {
+    const record = this.getHistory().find((item) => item.archivedPath === file.path);
+    if (!record?.groupId) {
+      return { attachments: [], failures: [], groupId: undefined, primary: await this.restoreNow(file) };
+    }
+    return this.restoreGroupFromRecord(file, record.groupId);
+  }
+
+  private async restoreGroupFromRecord(file: File, groupId: string): Promise<RestoreGroupResult> {
+    const primary = await this.restoreNow(file);
+    const attachments: RestoreResult[] = [];
+    const failures: AttachmentFailure[] = [];
+    // Read history fresh: restoreNow removed the primary record above.
+    const members = this.getHistory().filter((record) => record.groupId === groupId);
+    for (const member of members) {
+      const memberFile = this.host.getFile(member.archivedPath);
+      if (!memberFile) continue;
+      try {
+        attachments.push(await this.restoreNow(memberFile));
+      } catch (error) {
+        failures.push({ error, originalPath: member.archivedPath });
+      }
+    }
+    return { attachments, failures, groupId, primary };
   }
 
   private async cleanupEmptyParents(originalPath: string): Promise<string[]> {
