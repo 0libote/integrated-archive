@@ -79,11 +79,28 @@ test("sanitizes archive history records", () => {
   ]);
 });
 
+test("preserves attachment group ids in archive history", () => {
+  const data = sanitizeData({
+    archiveHistory: [
+      { archivedAt: 100, archivedPath: "Archive/note.md", groupId: "300:note.md", originalPath: "note.md" },
+      { archivedAt: 100, archivedPath: "Archive/image.png", groupId: "300:note.md", originalPath: "image.png" },
+      { archivedAt: 100, archivedPath: "Archive/bad.md", groupId: 42, originalPath: "bad.md" },
+    ],
+  });
+
+  assert.deepEqual(data.archiveHistory, [
+    { archivedAt: 100, archivedPath: "Archive/note.md", groupId: "300:note.md", originalPath: "note.md" },
+    { archivedAt: 100, archivedPath: "Archive/image.png", groupId: "300:note.md", originalPath: "image.png" },
+  ]);
+});
+
 test("keeps valid settings and normalizes a leading tag marker", () => {
   const settings = sanitizeSettings({
     archiveFolder: "Storage/Archive",
     preserveFolders: true,
     cleanEmptyFolders: true,
+    archiveAttachments: true,
+    includeSharedAttachments: true,
     deleteAction: "archive",
     tag: "#project/archive",
     existingDateAction: "overwrite",
@@ -92,6 +109,8 @@ test("keeps valid settings and normalizes a leading tag marker", () => {
   assert.equal(settings.archiveFolder, "Storage/Archive");
   assert.equal(settings.preserveFolders, true);
   assert.equal(settings.cleanEmptyFolders, true);
+  assert.equal(settings.archiveAttachments, true);
+  assert.equal(settings.includeSharedAttachments, true);
   assert.equal(settings.deleteAction, "archive");
   assert.equal(settings.tag, "project/archive");
   assert.equal(settings.existingDateAction, "overwrite");

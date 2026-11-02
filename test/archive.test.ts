@@ -23,6 +23,8 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
   const settings: ArchiveSettings = { ...DEFAULT_SETTINGS, ...overrides };
   const entries = new Map<string, VaultEntryKind>();
   const files = new Map<string, TestFile>();
+  const outgoing = new Map<string, string[]>();
+  const incoming = new Map<string, string[]>();
   let history: ArchiveRecord[] = [];
   const createdFolders: string[] = [];
   const deletedFolders: string[] = [];
@@ -69,6 +71,8 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
     async getFrontmatter(file) {
       return file.frontmatter;
     },
+    listIncomingLinks: (destPath: string) => incoming.get(destPath) ?? [],
+    listOutgoingLinks: (sourcePath: string) => outgoing.get(sourcePath) ?? [],
     normalizePath(path) {
       return path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/");
     },
@@ -101,7 +105,9 @@ function makeFixture(overrides: Partial<ArchiveSettings> = {}) {
     files,
     getHistory: () => history,
     host,
+    incoming,
     manager: new ArchiveManager(host, () => settings),
+    outgoing,
     renames,
     setHistory(records: ArchiveRecord[]) {
       history = records;
@@ -693,4 +699,182 @@ test("preserves string tag edits made while archived", async () => {
   file.frontmatter.tags = "archived new-tag";
   await fixture.manager.restore(file);
   assert.equal(file.frontmatter.tags, "new-tag");
+});
+
+function registerAttachmentFixture(overrides: Partial<ArchiveSettings> = {}) {
+  const fixture = makeFixture({ archiveAttachments: true, ...overrides });
+  const note = registerFile(fixture, "Projects/note.md");
+  const image = registerFile(fixture, "Assets/image.png");
+  fixture.outgoing.set(note.path, [image.path]);
+  fixture.incoming.set(image.path, [note.path]);
+  return { fixture, image, note };
+}
+
+test("collects no attachments when the setting is disabled", async () => {
+  const fixture = makeFixture();
+  registerFile(fixture, "Assets/image.png");
+  fixture.outgoing.set("Projects/note.md", ["Assets/image.png"]);
+
+  const plan = await fixture.manager.collectAttachments(makeFile());
+
+  assert.deepEqual(plan, { attachments: [], sharedSkipped: [] });
+});
+
+test("collects no attachments for non-Markdown files", async () => {
+  const fixture = makeFixture({ archiveAttachments: true });
+  registerFile(fixture, "Assets/image.png");
+  fixture.outgoing.set("Assets/image.png", ["Assets/other.png"]);
+
+  const plan = await fixture.manager.collectAttachments(makeFile("Assets/image.png"));
+
+  assert.deepEqual(plan, { attachments: [], sharedSkipped: [] });
+});
+
+test("archives exclusively-used attachments with a shared group id", async () => {
+  const { fixture, note } = registerAttachmentFixture();
+
+  const result = await fixture.manager.archiveWithAttachments(note);
+
+  assert.equal(result.primary.destination, "Archive/note.md");
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0]?.destination, "Archive/image.png");
+  assert.deepEqual(result.failures, []);
+  assert.deepEqual(result.sharedSkipped, []);
+  assert.ok(result.groupId);
+  const history = fixture.getHistory();
+  assert.equal(history.length, 2);
+  assert.ok(history.every((record) => record.groupId === result.groupId));
+});
+
+test("skips linked notes, canvas files, and missing files", async () => {
+  const fixture = makeFixture({ archiveAttachments: true });
+  const note = registerFile(fixture, "Projects/note.md");
+  registerFile(fixture, "Other/other.md");
+  registerFile(fixture, "Boards/board.canvas");
+  const image = registerFile(fixture, "Assets/image.png");
+  fixture.outgoing.set(note.path, ["Other/other.md", "Boards/board.canvas", "Assets/missing.png", image.path]);
+  fixture.incoming.set(image.path, [note.path]);
+
+  const plan = await fixture.manager.collectAttachments(note);
+
+  assert.deepEqual(plan.attachments.map((file) => file.path), [image.path]);
+  assert.deepEqual(plan.sharedSkipped, []);
+});
+
+test("skips archived, protected, and shared attachments", async () => {
+  const fixture = makeFixture({ archiveAttachments: true, excludedPaths: "Private" });
+  const note = registerFile(fixture, "Projects/note.md");
+  const shared = registerFile(fixture, "Assets/shared.png");
+  const other = registerFile(fixture, "Other/other.md");
+  registerFile(fixture, "Private/secret.png");
+  fixture.outgoing.set(note.path, ["Archive/old.png", "Private/secret.png", shared.path]);
+  fixture.incoming.set(shared.path, [note.path, other.path]);
+
+  const plan = await fixture.manager.collectAttachments(note);
+
+  assert.deepEqual(plan.attachments, []);
+  assert.deepEqual(plan.sharedSkipped, [shared.path]);
+});
+
+test("includes shared attachments when configured", async () => {
+  const { fixture, image, note } = registerAttachmentFixture({ includeSharedAttachments: true });
+  registerFile(fixture, "Other/other.md");
+  fixture.incoming.set(image.path, [note.path, "Other/other.md"]);
+
+  const plan = await fixture.manager.collectAttachments(note);
+
+  assert.deepEqual(plan.attachments.map((file) => file.path), [image.path]);
+  assert.deepEqual(plan.sharedSkipped, []);
+});
+
+test("treats an unreadable link index as shared", async () => {
+  const fixture = makeFixture({ archiveAttachments: true });
+  const note = registerFile(fixture, "Projects/note.md");
+  registerFile(fixture, "Assets/image.png");
+  fixture.outgoing.set(note.path, ["Assets/image.png"]);
+  fixture.host.listIncomingLinks = () => {
+    throw new Error("no index");
+  };
+
+  const plan = await fixture.manager.collectAttachments(note);
+
+  assert.deepEqual(plan.attachments, []);
+  assert.deepEqual(plan.sharedSkipped, ["Assets/image.png"]);
+});
+
+test("archives a note alone without a group id when it has no attachments", async () => {
+  const fixture = makeFixture({ archiveAttachments: true });
+
+  const result = await fixture.manager.archiveWithAttachments(makeFile());
+
+  assert.equal(result.primary.destination, "Archive/note.md");
+  assert.deepEqual(result.attachments, []);
+  assert.equal(result.groupId, undefined);
+  assert.equal(fixture.getHistory().length, 1);
+  assert.equal("groupId" in fixture.getHistory()[0]!, false);
+});
+
+test("passes an explicit group id through to the archive record", async () => {
+  const fixture = makeFixture();
+
+  await fixture.manager.archive(makeFile(), { groupId: "group-1" });
+
+  assert.equal(fixture.getHistory()[0]?.groupId, "group-1");
+  assert.equal(fixture.manager.getRecordGroup("Archive/note.md"), "group-1");
+  assert.deepEqual(fixture.manager.listGroupArchivedPaths("group-1"), ["Archive/note.md"]);
+  assert.deepEqual(fixture.manager.listGroupArchivedPaths("missing"), []);
+});
+
+test("restores a note together with its attachments", async () => {
+  const { fixture, image, note } = registerAttachmentFixture();
+
+  await fixture.manager.archiveWithAttachments(note);
+  const result = await fixture.manager.restoreWithGroup(note);
+
+  assert.equal(result.primary.destination, "Projects/note.md");
+  assert.equal(result.attachments.length, 1);
+  assert.equal(result.attachments[0]?.destination, "Assets/image.png");
+  assert.equal(note.path, "Projects/note.md");
+  assert.equal(image.path, "Assets/image.png");
+  assert.deepEqual(fixture.getHistory(), []);
+});
+
+test("records attachment restore failures without losing the note restore", async () => {
+  const { fixture, note } = registerAttachmentFixture();
+  await fixture.manager.archiveWithAttachments(note);
+  fixture.settings.excludedPaths = "Assets";
+
+  const result = await fixture.manager.restoreWithGroup(note);
+
+  assert.equal(result.primary.destination, "Projects/note.md");
+  assert.deepEqual(result.attachments, []);
+  assert.equal(result.failures.length, 1);
+  assert.equal(result.failures[0]?.originalPath, "Archive/image.png");
+});
+
+test("restores a single file when it has no group", async () => {
+  const fixture = makeFixture();
+  const file = makeFile();
+  await fixture.manager.archive(file);
+
+  const result = await fixture.manager.restoreWithGroup(file);
+
+  assert.equal(result.primary.destination, "Projects/note.md");
+  assert.deepEqual(result.attachments, []);
+  assert.equal(result.groupId, undefined);
+});
+
+test("undoes a grouped archive in one step", async () => {
+  const { fixture, image, note } = registerAttachmentFixture();
+
+  await fixture.manager.archiveWithAttachments(note);
+  assert.equal(fixture.getHistory().length, 2);
+
+  const result = await fixture.manager.undoLastArchiveGroup();
+
+  assert.equal(result.primary.destination, "Projects/note.md");
+  assert.equal(result.attachments.length, 1);
+  assert.equal(note.path, "Projects/note.md");
+  assert.equal(image.path, "Assets/image.png");
+  assert.deepEqual(fixture.getHistory(), []);
 });

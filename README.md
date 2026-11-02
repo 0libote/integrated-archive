@@ -11,6 +11,7 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 - **Archive current file** command and optional file-menu action.
 - Restore archived files to their original locations, or undo the latest available archive operation.
+- Optionally archive a note's linked attachments (images, PDFs, and other non-note files) together with it. Attachments linked from other notes stay in place unless shared attachments are included, and restoring the note brings its attachments back.
 - Archive or restore multiple selected files at once, or archive every file in a folder.
 - Choose whether Delete asks each time, archives automatically, or uses Obsidian’s normal delete flow.
 - The optional prompt offers **Archive / Delete / Cancel**. Delete follows your configured Obsidian trash setting and may be permanent.
@@ -27,7 +28,9 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, empty-folder cleanup, and date format under **Settings → Integrated Archive**.
 
-Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation while preserving subsequent edits (for new archive records), and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one file at a time: archiving N files takes N undos.
+Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation while preserving subsequent edits (for new archive records), and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one operation at a time: archiving N files takes N undos, while a note archived with its attachments restores together.
+
+Enable **Archive linked attachments** under Archiving settings to move a Markdown note's images, PDFs, and other linked files with it. Linked notes are never included. Attachments already in the archive, in protected paths, or linked from other notes are skipped unless **Include shared attachments** is on. Each attachment gets its own archive record grouped with the note, so restoring or undoing the note restores its attachments too.
 
 Enable **Store original path in notes** under the Restore settings to write each note's original location into its frontmatter. Restores fall back to this value when archive history is unavailable, for example after syncing the vault to another device. Only Markdown notes store this property; images, PDFs, and other files rely on archive history.
 

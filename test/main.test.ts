@@ -154,6 +154,7 @@ mock.module("obsidian", () => ({
   TAbstractFile: MockAbstractFile,
   TFile: MockFile,
   TFolder: MockFolder,
+  getLinkpath: (link: string) => link.split("#")[0],
   moment: (timestamp: number) => ({ format: (pattern: string) => `${pattern}:${timestamp}` }),
   normalizePath: (path: string) => path.replace(/^\/+|\/+$/g, "").replace(/\/{2,}/g, "/"),
 }));
@@ -170,6 +171,8 @@ interface TestApp {
   loadedData: unknown;
   metadataCache: {
     getFileCache(file: MockFile): { frontmatter: Record<string, unknown> } | null;
+    getFirstLinkpathDest(linkpath: string, sourcePath: string): MockFile | null;
+    resolvedLinks: Record<string, Record<string, number>>;
   };
   savedData: unknown;
   vault: {
@@ -198,6 +201,8 @@ function makeApp() {
     savedData: null,
     metadataCache: {
       getFileCache: (file) => ({ frontmatter: file.frontmatter }),
+      getFirstLinkpathDest: () => null,
+      resolvedLinks: {},
     },
     fileManager: {
       async processFrontMatter(file, update) {
@@ -702,4 +707,95 @@ test("hides archive actions for files outside the vault", async () => {
   expect(await plugin.archive(external as never)).toBe(false);
   expect(external.path).toBe("note.md");
   expect(notices).toContain("Cannot archive note.md: files outside the vault are not supported.");
+});
+
+test("archives and restores linked attachments together", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const note = new MockFile("Projects/note.md");
+  const image = new MockFile("Assets/image.png");
+  fixture.entries.set(note.path, note);
+  fixture.entries.set(image.path, image);
+  fixture.app.metadataCache.resolvedLinks = {
+    "Assets/image.png": {},
+    "Projects/note.md": { "Assets/image.png": 1 },
+  };
+  fixture.setActive(note);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  expect(await plugin.archive(note as never)).toBe(true);
+  expect(note.path).toBe("Archive/note.md");
+  expect(image.path).toBe("Archive/image.png");
+  expect(plugin.settings.archiveHistory).toHaveLength(2);
+  expect(notices.some((message) => message.includes("+ 1 attachment"))).toBe(true);
+
+  expect(await plugin.restore(note as never)).toBe(true);
+  expect(note.path).toBe("Projects/note.md");
+  expect(image.path).toBe("Assets/image.png");
+  expect(plugin.settings.archiveHistory).toEqual([]);
+});
+
+test("leaves shared attachments in place when archiving", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const note = new MockFile("Projects/note.md");
+  const image = new MockFile("Assets/image.png");
+  const other = new MockFile("Other/other.md");
+  fixture.entries.set(note.path, note);
+  fixture.entries.set(image.path, image);
+  fixture.entries.set(other.path, other);
+  fixture.app.metadataCache.resolvedLinks = {
+    "Other/other.md": { "Assets/image.png": 1 },
+    "Projects/note.md": { "Assets/image.png": 1 },
+  };
+  fixture.setActive(note);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  expect(await plugin.archive(note as never)).toBe(true);
+  expect(note.path).toBe("Archive/note.md");
+  expect(image.path).toBe("Assets/image.png");
+  expect(plugin.settings.archiveHistory).toHaveLength(1);
+  expect(notices.some((message) => message.includes("shared attachment"))).toBe(true);
+});
+
+test("expands batch archives with attachments", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true };
+  const folder = new MockFolder("Projects", "Projects");
+  const note = new MockFile("Projects/note.md");
+  const image = new MockFile("Assets/image.png");
+  note.parent = folder;
+  folder.children = [note];
+  fixture.entries.set(folder.path, folder);
+  fixture.entries.set(note.path, note);
+  fixture.entries.set(image.path, image);
+  fixture.app.metadataCache.resolvedLinks = {
+    "Projects/note.md": { "Assets/image.png": 1 },
+  };
+  fixture.setActive(note);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+
+  const command = (plugin as unknown as MockPlugin).commands.find((item) => item.id === "archive-current-folder");
+  const check = command?.checkCallback as ((checking: boolean) => boolean) | undefined;
+  check?.(false);
+  await Bun.sleep(10);
+
+  expect(note.path).toBe("Archive/note.md");
+  expect(image.path).toBe("Archive/image.png");
+  expect(notices).toContain("Archived 2 files.");
+});
+
+test("exposes the attachment settings", async () => {
+  const fixture = makeApp();
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const tab = (plugin as unknown as MockPlugin).settingTabs[0] as {
+    getSettingDefinitions(): Array<{ items: Array<{ control?: { key: string } }> }>;
+  };
+  const keys = tab.getSettingDefinitions().flatMap((group) => group.items.map((item) => item.control?.key));
+  expect(keys).toContain("archiveAttachments");
+  expect(keys).toContain("includeSharedAttachments");
 });

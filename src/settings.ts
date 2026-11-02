@@ -19,6 +19,7 @@ export interface ArchiveMetadataSnapshot {
 export interface ArchiveRecord {
   archivedAt: number;
   archivedPath: string;
+  groupId?: string;
   metadata?: ArchiveMetadataSnapshot;
   originalPath: string;
 }
@@ -27,6 +28,8 @@ export interface ArchiveSettings {
   archiveFolder: string;
   preserveFolders: boolean;
   cleanEmptyFolders: boolean;
+  archiveAttachments: boolean;
+  includeSharedAttachments: boolean;
   deleteAction: DeleteAction;
   showArchiveMenu: boolean;
   addTag: boolean;
@@ -52,6 +55,8 @@ export const DEFAULT_SETTINGS: ArchiveSettings = {
   archiveFolder: "Archive",
   preserveFolders: false,
   cleanEmptyFolders: false,
+  archiveAttachments: false,
+  includeSharedAttachments: false,
   deleteAction: "ask",
   showArchiveMenu: true,
   addTag: true,
@@ -77,6 +82,8 @@ export const DEFAULT_DATA: ArchiveData = {
 const BOOLEAN_KEYS = [
   "preserveFolders",
   "cleanEmptyFolders",
+  "archiveAttachments",
+  "includeSharedAttachments",
   "showArchiveMenu",
   "addTag",
   "addArchivedDate",
@@ -258,6 +265,7 @@ function isArchiveRecord(value: unknown): value is ArchiveRecord {
     && Number.isFinite(value.archivedAt)
     && typeof value.archivedPath === "string"
     && !!value.archivedPath
+    && (value.groupId === undefined || typeof value.groupId === "string")
     && typeof value.originalPath === "string"
     && !!value.originalPath
     && (value.metadata === undefined || isMetadataSnapshot(value.metadata));
