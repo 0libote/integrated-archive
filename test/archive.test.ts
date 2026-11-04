@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "bun:test";
 import { ArchiveManager, type ArchiveFile, type ArchiveHost, type VaultEntryKind } from "../src/archive.ts";
 import { DEFAULT_SETTINGS, type ArchiveRecord, type ArchiveSettings } from "../src/settings.ts";
 
@@ -128,21 +127,21 @@ test("archives a file and creates the destination folder", async () => {
 
   const result = await fixture.manager.archive(file);
 
-  assert.deepEqual(result, {
+  expect(result).toEqual({
     cleanedFolders: [],
     destination: "Archive/note.md",
     historyError: undefined,
     metadataError: undefined,
     originalPath: "Projects/note.md",
   });
-  assert.deepEqual(fixture.createdFolders, ["Archive"]);
-  assert.deepEqual(fixture.renames, [{ from: "Projects/note.md", to: "Archive/note.md" }]);
-  assert.equal(fixture.manager.isArchived(file), true);
+  expect(fixture.createdFolders).toEqual(["Archive"]);
+  expect(fixture.renames).toEqual([{ from: "Projects/note.md", to: "Archive/note.md" }]);
+  expect(fixture.manager.isArchived(file)).toBe(true);
   const [record] = fixture.getHistory();
-  assert.equal(record?.archivedAt, 300);
-  assert.equal(record?.archivedPath, "Archive/note.md");
-  assert.equal(record?.originalPath, "Projects/note.md");
-  assert.deepEqual(record?.metadata?.properties.map(({ key }) => key), ["tags", "archived", "created", "modified"]);
+  expect(record?.archivedAt).toBe(300);
+  expect(record?.archivedPath).toBe("Archive/note.md");
+  expect(record?.originalPath).toBe("Projects/note.md");
+  expect(record?.metadata?.properties.map(({ key }) => key)).toEqual(["tags", "archived", "created", "modified"]);
 });
 
 test("preserves the original folder structure when configured", async () => {
@@ -151,8 +150,8 @@ test("preserves the original folder structure when configured", async () => {
 
   const result = await fixture.manager.archive(file);
 
-  assert.equal(result.destination, "Archive/Projects/Work/note.md");
-  assert.deepEqual(fixture.createdFolders, ["Archive", "Archive/Projects", "Archive/Projects/Work"]);
+  expect(result.destination).toBe("Archive/Projects/Work/note.md");
+  expect(fixture.createdFolders).toEqual(["Archive", "Archive/Projects", "Archive/Projects/Work"]);
 });
 
 test("uses a collision suffix without overwriting an existing entry", async () => {
@@ -163,36 +162,36 @@ test("uses a collision suffix without overwriting an existing entry", async () =
 
   const result = await fixture.manager.archive(makeFile());
 
-  assert.equal(result.destination, "Archive/note (2).md");
-  assert.deepEqual(fixture.createdFolders, []);
+  expect(result.destination).toBe("Archive/note (2).md");
+  expect(fixture.createdFolders).toEqual([]);
 });
 
 test("rejects files already inside the archive", async () => {
   const fixture = makeFixture();
 
-  await assert.rejects(() => fixture.manager.archive(makeFile("Archive/note.md")), /already archived/);
-  assert.deepEqual(fixture.renames, []);
+  await expect(fixture.manager.archive(makeFile("Archive/note.md"))).rejects.toThrow(/already archived/);
+  expect(fixture.renames).toEqual([]);
 });
 
 test("rejects an empty archive folder and a file blocking a parent folder", async () => {
   const empty = makeFixture({ archiveFolder: " " });
-  await assert.rejects(() => empty.manager.archive(makeFile()), /Choose an archive folder/);
+  await expect(empty.manager.archive(makeFile())).rejects.toThrow(/Choose an archive folder/);
 
   const blocked = makeFixture({ archiveFolder: "Storage/Archive" });
   blocked.entries.set("Storage", "file");
-  await assert.rejects(() => blocked.manager.archive(makeFile()), /Storage is a file/);
-  assert.deepEqual(blocked.renames, []);
+  await expect(blocked.manager.archive(makeFile())).rejects.toThrow(/Storage is a file/);
+  expect(blocked.renames).toEqual([]);
 });
 
 test("refuses to archive protected paths", async () => {
   const fixture = makeFixture({ excludedPaths: "Private\nTemplates" });
 
-  await assert.rejects(() => fixture.manager.archive(makeFile("Private/secret.md")), /protected/);
-  assert.deepEqual(fixture.renames, []);
-  assert.equal(fixture.manager.isExcludedPath("Templates/Daily/note.md"), true);
-  assert.equal(fixture.manager.isExcludedPath("Private/note.md"), true);
-  assert.equal(fixture.manager.isExcludedPath("Private2/note.md"), false);
-  assert.equal(fixture.manager.isExcludedPath("Projects/note.md"), false);
+  await expect(fixture.manager.archive(makeFile("Private/secret.md"))).rejects.toThrow(/protected/);
+  expect(fixture.renames).toEqual([]);
+  expect(fixture.manager.isExcludedPath("Templates/Daily/note.md")).toBe(true);
+  expect(fixture.manager.isExcludedPath("Private/note.md")).toBe(true);
+  expect(fixture.manager.isExcludedPath("Private2/note.md")).toBe(false);
+  expect(fixture.manager.isExcludedPath("Projects/note.md")).toBe(false);
 });
 
 test("keeps an existing archive tag unchanged and writes all configured dates", async () => {
@@ -202,10 +201,10 @@ test("keeps an existing archive tag unchanged and writes all configured dates", 
 
   await fixture.manager.archive(file);
 
-  assert.equal(file.frontmatter.tags, "existing, #archived");
-  assert.equal(file.frontmatter.archived, "FORMAT:300");
-  assert.equal(file.frontmatter.created, "FORMAT:100");
-  assert.equal(file.frontmatter.modified, "FORMAT:200");
+  expect(file.frontmatter.tags).toBe("existing, #archived");
+  expect(file.frontmatter.archived).toBe("FORMAT:300");
+  expect(file.frontmatter.created).toBe("FORMAT:100");
+  expect(file.frontmatter.modified).toBe("FORMAT:200");
 });
 
 test("adds a missing archive tag without discarding existing tags", async () => {
@@ -215,7 +214,7 @@ test("adds a missing archive tag without discarding existing tags", async () => 
 
   await fixture.manager.archive(file);
 
-  assert.deepEqual(file.frontmatter.tags, ["existing", "archived"]);
+  expect(file.frontmatter.tags).toEqual(["existing", "archived"]);
 });
 
 test("preserves existing created and modified dates by default", async () => {
@@ -225,9 +224,9 @@ test("preserves existing created and modified dates by default", async () => {
 
   await fixture.manager.archive(file);
 
-  assert.equal(file.frontmatter.archived, "YYYY-MM-DD:300");
-  assert.equal(file.frontmatter.created, "original-created");
-  assert.equal(file.frontmatter.modified, "original-modified");
+  expect(file.frontmatter.archived).toBe("YYYY-MM-DD:300");
+  expect(file.frontmatter.created).toBe("original-created");
+  expect(file.frontmatter.modified).toBe("original-modified");
 });
 
 test("replaces existing created and modified dates when configured", async () => {
@@ -237,8 +236,8 @@ test("replaces existing created and modified dates when configured", async () =>
 
   await fixture.manager.archive(file);
 
-  assert.equal(file.frontmatter.created, "YYYY-MM-DD:100");
-  assert.equal(file.frontmatter.modified, "YYYY-MM-DD:200");
+  expect(file.frontmatter.created).toBe("YYYY-MM-DD:100");
+  expect(file.frontmatter.modified).toBe("YYYY-MM-DD:200");
 });
 
 test("does not process frontmatter for non-Markdown files", async () => {
@@ -253,8 +252,8 @@ test("does not process frontmatter for non-Markdown files", async () => {
 
   await fixture.manager.archive(file);
 
-  assert.equal(processed, false);
-  assert.deepEqual(file.frontmatter, {});
+  expect(processed).toBe(false);
+  expect(file.frontmatter).toEqual({});
 });
 
 test("reports a metadata failure after preserving the successful move", async () => {
@@ -265,9 +264,9 @@ test("reports a metadata failure after preserving the successful move", async ()
 
   const result = await fixture.manager.archive(file);
 
-  assert.equal(result.destination, "Archive/note.md");
-  assert.equal(result.metadataError, error);
-  assert.equal(file.path, "Archive/note.md");
+  expect(result.destination).toBe("Archive/note.md");
+  expect(result.metadataError).toBe(error);
+  expect(file.path).toBe("Archive/note.md");
 });
 
 test("records a history warning without undoing a successful archive", async () => {
@@ -277,8 +276,8 @@ test("records a history warning without undoing a successful archive", async () 
 
   const result = await fixture.manager.archive(makeFile());
 
-  assert.equal(result.historyError, error);
-  assert.equal(result.destination, "Archive/note.md");
+  expect(result.historyError).toBe(error);
+  expect(result.destination).toBe("Archive/note.md");
 });
 
 test("restores an archived file to its exact original path", async () => {
@@ -290,15 +289,15 @@ test("restores an archived file to its exact original path", async () => {
 
   const result = await fixture.manager.restore(file);
 
-  assert.deepEqual(result, {
+  expect(result).toEqual({
     destination: "Projects/Work/note.md",
     historyError: undefined,
     inferredOriginalPath: false,
     metadataError: undefined,
   });
-  assert.equal(file.path, "Projects/Work/note.md");
-  assert.deepEqual(file.frontmatter, originalFrontmatter);
-  assert.deepEqual(fixture.getHistory(), []);
+  expect(file.path).toBe("Projects/Work/note.md");
+  expect(file.frontmatter).toEqual(originalFrontmatter);
+  expect(fixture.getHistory()).toEqual([]);
 });
 
 test("reports a metadata failure after preserving a successful restore", async () => {
@@ -310,10 +309,10 @@ test("reports a metadata failure after preserving a successful restore", async (
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "Projects/note.md");
-  assert.equal(result.metadataError, error);
-  assert.equal(file.path, "Projects/note.md");
-  assert.deepEqual(fixture.getHistory(), []);
+  expect(result.destination).toBe("Projects/note.md");
+  expect(result.metadataError).toBe(error);
+  expect(file.path).toBe("Projects/note.md");
+  expect(fixture.getHistory()).toEqual([]);
 });
 
 test("uses a collision-safe name when restoring", async () => {
@@ -324,7 +323,7 @@ test("uses a collision-safe name when restoring", async () => {
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "Projects/note (1).md");
+  expect(result.destination).toBe("Projects/note (1).md");
 });
 
 test("infers a legacy restore path when no history exists", async () => {
@@ -332,7 +331,7 @@ test("infers a legacy restore path when no history exists", async () => {
   const nested = makeFile("Archive/Projects/note.md");
   preserved.entries.set(nested.path, "file");
   preserved.files.set(nested.path, nested);
-  assert.deepEqual(await preserved.manager.restore(nested), {
+  expect(await preserved.manager.restore(nested)).toEqual({
     destination: "Projects/note.md",
     historyError: undefined,
     inferredOriginalPath: true,
@@ -343,7 +342,7 @@ test("infers a legacy restore path when no history exists", async () => {
   const root = makeFile("Archive/legacy.md");
   flat.entries.set(root.path, "file");
   flat.files.set(root.path, root);
-  assert.equal((await flat.manager.restore(root)).destination, "legacy.md");
+  expect((await flat.manager.restore(root)).destination).toBe("legacy.md");
 });
 
 test("undoes the most recent archive that still exists", async () => {
@@ -358,12 +357,12 @@ test("undoes the most recent archive that still exists", async () => {
     { archivedAt: 200, archivedPath: "Archive/current.md", originalPath: "Projects/current.md" },
   ]);
 
-  assert.equal(fixture.manager.canUndo(), true);
+  expect(fixture.manager.canUndo()).toBe(true);
   const result = await fixture.manager.undoLastArchive();
 
-  assert.equal(result.destination, "Projects/current.md");
-  assert.equal(fixture.manager.canUndo(), false);
-  assert.deepEqual(fixture.getHistory(), [
+  expect(result.destination).toBe("Projects/current.md");
+  expect(fixture.manager.canUndo()).toBe(false);
+  expect(fixture.getHistory()).toEqual([
     { archivedAt: 100, archivedPath: "Archive/missing.md", originalPath: "missing.md" },
   ]);
 });
@@ -373,7 +372,7 @@ test("recognizes recorded archive files after the archive folder setting changes
   const file = makeFile("Old Archive/note.md");
   fixture.setHistory([{ archivedAt: 100, archivedPath: file.path, originalPath: "note.md" }]);
 
-  assert.equal(fixture.manager.isArchived(file), true);
+  expect(fixture.manager.isArchived(file)).toBe(true);
 });
 
 test("does not duplicate a tag that differs only in case", async () => {
@@ -383,27 +382,27 @@ test("does not duplicate a tag that differs only in case", async () => {
 
   await fixture.manager.archive(file);
 
-  assert.deepEqual(file.frontmatter.tags, ["archived"]);
+  expect(file.frontmatter.tags).toEqual(["archived"]);
 });
 
 test("rewrites record paths when an archive folder is renamed", async () => {
   const fixture = makeFixture({ preserveFolders: true });
   await fixture.manager.archive(makeFile("Projects/Work/note.md"));
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/Projects/Work/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Archive/Projects/Work/note.md");
 
   await fixture.manager.reconcileRename("Archive/Projects", "Archive/Stash");
 
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/Stash/Work/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Archive/Stash/Work/note.md");
 });
 
 test("drops records when a file leaves the archive without the plugin", async () => {
   const fixture = makeFixture();
   await fixture.manager.archive(makeFile("Projects/note.md"));
-  assert.equal(fixture.getHistory().length, 1);
+  expect(fixture.getHistory().length).toBe(1);
 
   await fixture.manager.reconcileRename("Archive/note.md", "Elsewhere/note.md");
 
-  assert.deepEqual(fixture.getHistory(), []);
+  expect(fixture.getHistory()).toEqual([]);
 });
 
 test("keeps a record when a file is renamed inside the archive", async () => {
@@ -412,15 +411,15 @@ test("keeps a record when a file is renamed inside the archive", async () => {
 
   await fixture.manager.reconcileRename("Archive/note.md", "Archive/renamed.md");
 
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Archive/renamed.md");
-  assert.equal(fixture.getHistory()[0]?.originalPath, "Projects/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Archive/renamed.md");
+  expect(fixture.getHistory()[0]?.originalPath).toBe("Projects/note.md");
 });
 
 test("reports when there is nothing to undo", async () => {
   const fixture = makeFixture();
 
-  assert.equal(fixture.manager.canUndo(), false);
-  await assert.rejects(() => fixture.manager.undoLastArchive(), /no archived file/);
+  expect(fixture.manager.canUndo()).toBe(false);
+  await expect(fixture.manager.undoLastArchive()).rejects.toThrow(/no archived file/);
 });
 
 test("does not write a stored path for non-Markdown files", async () => {
@@ -435,7 +434,7 @@ test("does not write a stored path for non-Markdown files", async () => {
 
   await fixture.manager.archive(file);
 
-  assert.deepEqual(file.frontmatter, {});
+  expect(file.frontmatter).toEqual({});
 });
 
 test("restores from a stored original path when history is gone", async () => {
@@ -448,15 +447,15 @@ test("restores from a stored original path when history is gone", async () => {
   });
   const file = makeFile("Projects/Work/note.md");
   await fixture.manager.archive(file);
-  assert.equal(file.frontmatter["archive-original-path"], "Projects/Work/note.md");
+  expect(file.frontmatter["archive-original-path"]).toBe("Projects/Work/note.md");
 
   fixture.setHistory([]);
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "Projects/Work/note.md");
-  assert.equal(result.inferredOriginalPath, true);
-  assert.equal(file.frontmatter["archive-original-path"], undefined);
+  expect(result.destination).toBe("Projects/Work/note.md");
+  expect(result.inferredOriginalPath).toBe(true);
+  expect(file.frontmatter["archive-original-path"]).toBe(undefined);
 });
 
 test("ignores a stored original path that points back into the archive", async () => {
@@ -468,7 +467,7 @@ test("ignores a stored original path that points back into the archive", async (
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "legacy.md");
+  expect(result.destination).toBe("legacy.md");
 });
 
 test("serializes simultaneous archives without losing history", async () => {
@@ -478,7 +477,7 @@ test("serializes simultaneous archives without losing history", async () => {
 
   await Promise.all([fixture.manager.archive(first), fixture.manager.archive(second)]);
 
-  assert.deepEqual(fixture.getHistory().map(({ archivedPath }) => archivedPath), [
+  expect(fixture.getHistory().map(({ archivedPath }) => archivedPath)).toEqual([
     "Archive/first.md",
     "Archive/second.md",
   ]);
@@ -488,13 +487,13 @@ test("restores a root-level file without creating a spurious folder", async () =
   const fixture = makeFixture();
   const file = makeFile("note.md");
   await fixture.manager.archive(file);
-  assert.equal(file.path, "Archive/note.md");
+  expect(file.path).toBe("Archive/note.md");
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "note.md");
-  assert.equal(file.path, "note.md");
-  assert.ok(!fixture.createdFolders.includes("note.m"));
+  expect(result.destination).toBe("note.md");
+  expect(file.path).toBe("note.md");
+  expect(fixture.createdFolders.includes("note.m")).toBeFalsy();
 });
 
 test("keeps history when the archive folder itself is renamed", async () => {
@@ -503,17 +502,17 @@ test("keeps history when the archive folder itself is renamed", async () => {
 
   await fixture.manager.reconcileRename("Archive", "Storage/Archive");
 
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Storage/Archive/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Storage/Archive/note.md");
 });
 
 test("keeps history when an ancestor of the archive folder is renamed", async () => {
   const fixture = makeFixture({ archiveFolder: "Storage/Archive" });
   await fixture.manager.archive(makeFile("Projects/note.md"));
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Storage/Archive/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Storage/Archive/note.md");
 
   await fixture.manager.reconcileRename("Storage", "Vault/Storage");
 
-  assert.equal(fixture.getHistory()[0]?.archivedPath, "Vault/Storage/Archive/note.md");
+  expect(fixture.getHistory()[0]?.archivedPath).toBe("Vault/Storage/Archive/note.md");
 });
 
 test("infers nested legacy paths even when folder structure is not preserved", async () => {
@@ -524,7 +523,7 @@ test("infers nested legacy paths even when folder structure is not preserved", a
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "Projects/note.md");
+  expect(result.destination).toBe("Projects/note.md");
 });
 
 test("normalizes existing tag markers when adding the archive tag", async () => {
@@ -534,7 +533,7 @@ test("normalizes existing tag markers when adding the archive tag", async () => 
 
   await fixture.manager.archive(file);
 
-  assert.deepEqual(file.frontmatter.tags, ["existing", "archived"]);
+  expect(file.frontmatter.tags).toEqual(["existing", "archived"]);
 });
 
 test("restores a pristine copy of object-valued properties", async () => {
@@ -544,24 +543,24 @@ test("restores a pristine copy of object-valued properties", async () => {
   file.frontmatter = { created: original };
 
   await fixture.manager.archive(file);
-  assert.equal(typeof file.frontmatter.created, "string");
+  expect(typeof file.frontmatter.created).toBe("string");
 
   original.nested = 999;
   await fixture.manager.restore(file);
 
-  assert.deepEqual(file.frontmatter.created, { nested: 1 });
+  expect(file.frontmatter.created).toEqual({ nested: 1 });
 });
 
 test("blocks restoring into a protected location", async () => {
   const fixture = makeFixture({ excludedPaths: "Private" });
   const file = makeFile("Projects/note.md");
   await fixture.manager.archive(file);
-  assert.equal(file.path, "Archive/note.md");
+  expect(file.path).toBe("Archive/note.md");
 
   // Simulate the original location becoming protected after archiving.
   fixture.settings.excludedPaths = "Private\nProjects";
 
-  await assert.rejects(() => fixture.manager.restore(file), /protected location/);
+  await expect(fixture.manager.restore(file)).rejects.toThrow(/protected location/);
 });
 
 test("ignores a stored original path inside a protected location", async () => {
@@ -577,13 +576,13 @@ test("ignores a stored original path inside a protected location", async () => {
 
   const result = await fixture.manager.restore(file);
 
-  assert.equal(result.destination, "legacy.md");
+  expect(result.destination).toBe("legacy.md");
 });
 
 test("refuses to archive when the archive folder is protected", async () => {
   const fixture = makeFixture({ archiveFolder: "Private/Archive", excludedPaths: "Private" });
 
-  await assert.rejects(() => fixture.manager.archive(makeFile("Projects/note.md")), /protected location/);
+  await expect(fixture.manager.archive(makeFile("Projects/note.md"))).rejects.toThrow(/protected location/);
 });
 
 test("leaves empty folders behind by default", async () => {
@@ -593,9 +592,9 @@ test("leaves empty folders behind by default", async () => {
 
   const result = await fixture.manager.archive(file);
 
-  assert.deepEqual(result.cleanedFolders, []);
-  assert.deepEqual(fixture.deletedFolders, []);
-  assert.equal(fixture.entries.get("Projects"), "folder");
+  expect(result.cleanedFolders).toEqual([]);
+  expect(fixture.deletedFolders).toEqual([]);
+  expect(fixture.entries.get("Projects")).toBe("folder");
 });
 
 test("removes folders that become empty after archiving when enabled", async () => {
@@ -606,9 +605,9 @@ test("removes folders that become empty after archiving when enabled", async () 
 
   const result = await fixture.manager.archive(file);
 
-  assert.equal(result.destination, "Archive/note.md");
-  assert.deepEqual(result.cleanedFolders, ["Projects/Sub", "Projects"]);
-  assert.deepEqual(fixture.deletedFolders, ["Projects/Sub", "Projects"]);
+  expect(result.destination).toBe("Archive/note.md");
+  expect(result.cleanedFolders).toEqual(["Projects/Sub", "Projects"]);
+  expect(fixture.deletedFolders).toEqual(["Projects/Sub", "Projects"]);
 });
 
 test("stops cleanup at the first folder that still contains files", async () => {
@@ -620,9 +619,9 @@ test("stops cleanup at the first folder that still contains files", async () => 
 
   const result = await fixture.manager.archive(file);
 
-  assert.deepEqual(result.cleanedFolders, ["Projects/Sub"]);
-  assert.deepEqual(fixture.deletedFolders, ["Projects/Sub"]);
-  assert.equal(fixture.entries.get("Projects"), "folder");
+  expect(result.cleanedFolders).toEqual(["Projects/Sub"]);
+  expect(fixture.deletedFolders).toEqual(["Projects/Sub"]);
+  expect(fixture.entries.get("Projects")).toBe("folder");
 });
 
 test("never deletes the archive folder or an ancestor containing it", async () => {
@@ -632,10 +631,10 @@ test("never deletes the archive folder or an ancestor containing it", async () =
 
   const result = await fixture.manager.archive(file);
 
-  assert.equal(result.destination, "Storage/Archive/note.md");
-  assert.deepEqual(result.cleanedFolders, []);
-  assert.deepEqual(fixture.deletedFolders, []);
-  assert.equal(fixture.entries.get("Storage"), "folder");
+  expect(result.destination).toBe("Storage/Archive/note.md");
+  expect(result.cleanedFolders).toEqual([]);
+  expect(fixture.deletedFolders).toEqual([]);
+  expect(fixture.entries.get("Storage")).toBe("folder");
 });
 
 test("handles root-level files without attempting cleanup", async () => {
@@ -643,9 +642,9 @@ test("handles root-level files without attempting cleanup", async () => {
 
   const result = await fixture.manager.archive(makeFile("note.md"));
 
-  assert.equal(result.destination, "Archive/note.md");
-  assert.deepEqual(result.cleanedFolders, []);
-  assert.deepEqual(fixture.deletedFolders, []);
+  expect(result.destination).toBe("Archive/note.md");
+  expect(result.cleanedFolders).toEqual([]);
+  expect(fixture.deletedFolders).toEqual([]);
 });
 
 test("treats cleanup failures as non-fatal", async () => {
@@ -658,9 +657,9 @@ test("treats cleanup failures as non-fatal", async () => {
 
   const result = await fixture.manager.archive(file);
 
-  assert.equal(result.destination, "Archive/note.md");
-  assert.equal(file.path, "Archive/note.md");
-  assert.deepEqual(result.cleanedFolders, []);
+  expect(result.destination).toBe("Archive/note.md");
+  expect(file.path).toBe("Archive/note.md");
+  expect(result.cleanedFolders).toEqual([]);
 });
 
 function registerFile(fixture: ReturnType<typeof makeFixture>, path: string): TestFile {
@@ -679,7 +678,7 @@ test("preserves metadata edits made while archived and removes only the archive 
   file.frontmatter.archived = "user-edited";
   delete file.frontmatter.created;
   await fixture.manager.restore(file);
-  assert.deepEqual(file.frontmatter, { tags: ["active", "new-tag"], archived: "user-edited" });
+  expect(file.frontmatter).toEqual({ tags: ["active", "new-tag"], archived: "user-edited" });
 });
 
 test("restores legacy metadata snapshots without archived values", async () => {
@@ -689,7 +688,7 @@ test("restores legacy metadata snapshots without archived values", async () => {
   await fixture.manager.archive(file);
   for (const property of fixture.getHistory()[0]!.metadata!.properties) delete property.archivedValue;
   await fixture.manager.restore(file);
-  assert.deepEqual(file.frontmatter, { tags: ["original"] });
+  expect(file.frontmatter).toEqual({ tags: ["original"] });
 });
 
 test("preserves string tag edits made while archived", async () => {
@@ -698,7 +697,7 @@ test("preserves string tag edits made while archived", async () => {
   await fixture.manager.archive(file);
   file.frontmatter.tags = "archived new-tag";
   await fixture.manager.restore(file);
-  assert.equal(file.frontmatter.tags, "new-tag");
+  expect(file.frontmatter.tags).toBe("new-tag");
 });
 
 function registerAttachmentFixture(overrides: Partial<ArchiveSettings> = {}) {
@@ -717,7 +716,7 @@ test("collects no attachments when the setting is disabled", async () => {
 
   const plan = await fixture.manager.collectAttachments(makeFile());
 
-  assert.deepEqual(plan, { attachments: [], sharedSkipped: [] });
+  expect(plan).toEqual({ attachments: [], sharedSkipped: [] });
 });
 
 test("collects no attachments for non-Markdown files", async () => {
@@ -727,7 +726,7 @@ test("collects no attachments for non-Markdown files", async () => {
 
   const plan = await fixture.manager.collectAttachments(makeFile("Assets/image.png"));
 
-  assert.deepEqual(plan, { attachments: [], sharedSkipped: [] });
+  expect(plan).toEqual({ attachments: [], sharedSkipped: [] });
 });
 
 test("archives exclusively-used attachments with a shared group id", async () => {
@@ -735,15 +734,15 @@ test("archives exclusively-used attachments with a shared group id", async () =>
 
   const result = await fixture.manager.archiveWithAttachments(note);
 
-  assert.equal(result.primary.destination, "Archive/note.md");
-  assert.equal(result.attachments.length, 1);
-  assert.equal(result.attachments[0]?.destination, "Archive/image.png");
-  assert.deepEqual(result.failures, []);
-  assert.deepEqual(result.sharedSkipped, []);
-  assert.ok(result.groupId);
+  expect(result.primary.destination).toBe("Archive/note.md");
+  expect(result.attachments.length).toBe(1);
+  expect(result.attachments[0]?.destination).toBe("Archive/image.png");
+  expect(result.failures).toEqual([]);
+  expect(result.sharedSkipped).toEqual([]);
+  expect(result.groupId).toBeTruthy();
   const history = fixture.getHistory();
-  assert.equal(history.length, 2);
-  assert.ok(history.every((record) => record.groupId === result.groupId));
+  expect(history.length).toBe(2);
+  expect(history.every((record) => record.groupId === result.groupId)).toBeTruthy();
 });
 
 test("skips linked notes, canvas files, and missing files", async () => {
@@ -757,8 +756,8 @@ test("skips linked notes, canvas files, and missing files", async () => {
 
   const plan = await fixture.manager.collectAttachments(note);
 
-  assert.deepEqual(plan.attachments.map((file) => file.path), [image.path]);
-  assert.deepEqual(plan.sharedSkipped, []);
+  expect(plan.attachments.map((file) => file.path)).toEqual([image.path]);
+  expect(plan.sharedSkipped).toEqual([]);
 });
 
 test("skips archived, protected, and shared attachments", async () => {
@@ -772,8 +771,8 @@ test("skips archived, protected, and shared attachments", async () => {
 
   const plan = await fixture.manager.collectAttachments(note);
 
-  assert.deepEqual(plan.attachments, []);
-  assert.deepEqual(plan.sharedSkipped, [shared.path]);
+  expect(plan.attachments).toEqual([]);
+  expect(plan.sharedSkipped).toEqual([shared.path]);
 });
 
 test("includes shared attachments when configured", async () => {
@@ -783,8 +782,8 @@ test("includes shared attachments when configured", async () => {
 
   const plan = await fixture.manager.collectAttachments(note);
 
-  assert.deepEqual(plan.attachments.map((file) => file.path), [image.path]);
-  assert.deepEqual(plan.sharedSkipped, []);
+  expect(plan.attachments.map((file) => file.path)).toEqual([image.path]);
+  expect(plan.sharedSkipped).toEqual([]);
 });
 
 test("treats an unreadable link index as shared", async () => {
@@ -798,8 +797,8 @@ test("treats an unreadable link index as shared", async () => {
 
   const plan = await fixture.manager.collectAttachments(note);
 
-  assert.deepEqual(plan.attachments, []);
-  assert.deepEqual(plan.sharedSkipped, ["Assets/image.png"]);
+  expect(plan.attachments).toEqual([]);
+  expect(plan.sharedSkipped).toEqual(["Assets/image.png"]);
 });
 
 test("archives a note alone without a group id when it has no attachments", async () => {
@@ -807,11 +806,11 @@ test("archives a note alone without a group id when it has no attachments", asyn
 
   const result = await fixture.manager.archiveWithAttachments(makeFile());
 
-  assert.equal(result.primary.destination, "Archive/note.md");
-  assert.deepEqual(result.attachments, []);
-  assert.equal(result.groupId, undefined);
-  assert.equal(fixture.getHistory().length, 1);
-  assert.equal("groupId" in fixture.getHistory()[0]!, false);
+  expect(result.primary.destination).toBe("Archive/note.md");
+  expect(result.attachments).toEqual([]);
+  expect(result.groupId).toBe(undefined);
+  expect(fixture.getHistory().length).toBe(1);
+  expect("groupId" in fixture.getHistory()[0]!).toBe(false);
 });
 
 test("passes an explicit group id through to the archive record", async () => {
@@ -819,10 +818,10 @@ test("passes an explicit group id through to the archive record", async () => {
 
   await fixture.manager.archive(makeFile(), { groupId: "group-1" });
 
-  assert.equal(fixture.getHistory()[0]?.groupId, "group-1");
-  assert.equal(fixture.manager.getRecordGroup("Archive/note.md"), "group-1");
-  assert.deepEqual(fixture.manager.listGroupArchivedPaths("group-1"), ["Archive/note.md"]);
-  assert.deepEqual(fixture.manager.listGroupArchivedPaths("missing"), []);
+  expect(fixture.getHistory()[0]?.groupId).toBe("group-1");
+  expect(fixture.manager.getRecordGroup("Archive/note.md")).toBe("group-1");
+  expect(fixture.manager.listGroupArchivedPaths("group-1")).toEqual(["Archive/note.md"]);
+  expect(fixture.manager.listGroupArchivedPaths("missing")).toEqual([]);
 });
 
 test("restores a note together with its attachments", async () => {
@@ -831,12 +830,12 @@ test("restores a note together with its attachments", async () => {
   await fixture.manager.archiveWithAttachments(note);
   const result = await fixture.manager.restoreWithGroup(note);
 
-  assert.equal(result.primary.destination, "Projects/note.md");
-  assert.equal(result.attachments.length, 1);
-  assert.equal(result.attachments[0]?.destination, "Assets/image.png");
-  assert.equal(note.path, "Projects/note.md");
-  assert.equal(image.path, "Assets/image.png");
-  assert.deepEqual(fixture.getHistory(), []);
+  expect(result.primary.destination).toBe("Projects/note.md");
+  expect(result.attachments.length).toBe(1);
+  expect(result.attachments[0]?.destination).toBe("Assets/image.png");
+  expect(note.path).toBe("Projects/note.md");
+  expect(image.path).toBe("Assets/image.png");
+  expect(fixture.getHistory()).toEqual([]);
 });
 
 test("records attachment restore failures without losing the note restore", async () => {
@@ -846,10 +845,10 @@ test("records attachment restore failures without losing the note restore", asyn
 
   const result = await fixture.manager.restoreWithGroup(note);
 
-  assert.equal(result.primary.destination, "Projects/note.md");
-  assert.deepEqual(result.attachments, []);
-  assert.equal(result.failures.length, 1);
-  assert.equal(result.failures[0]?.originalPath, "Archive/image.png");
+  expect(result.primary.destination).toBe("Projects/note.md");
+  expect(result.attachments).toEqual([]);
+  expect(result.failures.length).toBe(1);
+  expect(result.failures[0]?.originalPath).toBe("Archive/image.png");
 });
 
 test("restores a single file when it has no group", async () => {
@@ -859,22 +858,22 @@ test("restores a single file when it has no group", async () => {
 
   const result = await fixture.manager.restoreWithGroup(file);
 
-  assert.equal(result.primary.destination, "Projects/note.md");
-  assert.deepEqual(result.attachments, []);
-  assert.equal(result.groupId, undefined);
+  expect(result.primary.destination).toBe("Projects/note.md");
+  expect(result.attachments).toEqual([]);
+  expect(result.groupId).toBe(undefined);
 });
 
 test("undoes a grouped archive in one step", async () => {
   const { fixture, image, note } = registerAttachmentFixture();
 
   await fixture.manager.archiveWithAttachments(note);
-  assert.equal(fixture.getHistory().length, 2);
+  expect(fixture.getHistory().length).toBe(2);
 
   const result = await fixture.manager.undoLastArchiveGroup();
 
-  assert.equal(result.primary.destination, "Projects/note.md");
-  assert.equal(result.attachments.length, 1);
-  assert.equal(note.path, "Projects/note.md");
-  assert.equal(image.path, "Assets/image.png");
-  assert.deepEqual(fixture.getHistory(), []);
+  expect(result.primary.destination).toBe("Projects/note.md");
+  expect(result.attachments.length).toBe(1);
+  expect(note.path).toBe("Projects/note.md");
+  expect(image.path).toBe("Assets/image.png");
+  expect(fixture.getHistory()).toEqual([]);
 });

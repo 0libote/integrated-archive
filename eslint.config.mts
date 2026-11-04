@@ -38,6 +38,9 @@ export default defineConfig(
       "@typescript-eslint/no-floating-promises": "off",
       "@typescript-eslint/only-throw-error": "off",
       "@typescript-eslint/unbound-method": "off",
+      // bun:test's `.rejects` matcher isn't typed as Thenable, so awaiting
+      // `expect(promise).rejects.toThrow()` trips this rule incorrectly.
+      "@typescript-eslint/await-thenable": "off",
     },
   },
 );

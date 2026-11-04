@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "version:check": "bun scripts/version.mjs --check",
     "bump": "bun scripts/version.mjs",
-    "check": "bun run version:check && bun run build && bun run lint && bun test"
+    "check": "bun run version:check && bun run build && bun run lint && bun run test:coverage"
   },
   "devDependencies": {
     "@types/bun": "^1.4.4",

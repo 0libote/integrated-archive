@@ -1,31 +1,30 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "bun:test";
 import { addCollisionSuffix, isPathInFolder, parentFolder, resolveDeleteAction } from "../src/path.ts";
 
 test("adds collision numbers before the extension", () => {
-  assert.equal(addCollisionSuffix("Archive/note.md", 0), "Archive/note.md");
-  assert.equal(addCollisionSuffix("Archive/note.md", 2), "Archive/note (2).md");
-  assert.equal(addCollisionSuffix("Archive/folder.name/note", 1), "Archive/folder.name/note (1)");
+  expect(addCollisionSuffix("Archive/note.md", 0)).toBe("Archive/note.md");
+  expect(addCollisionSuffix("Archive/note.md", 2)).toBe("Archive/note (2).md");
+  expect(addCollisionSuffix("Archive/folder.name/note", 1)).toBe("Archive/folder.name/note (1)");
 });
 
 test("treats leading-dot files as extensionless", () => {
-  assert.equal(addCollisionSuffix("Archive/.gitignore", 1), "Archive/.gitignore (1)");
-  assert.equal(addCollisionSuffix(".env", 1), ".env (1)");
+  expect(addCollisionSuffix("Archive/.gitignore", 1)).toBe("Archive/.gitignore (1)");
+  expect(addCollisionSuffix(".env", 1)).toBe(".env (1)");
 });
 
 test("only matches files inside the configured archive", () => {
-  assert.equal(isPathInFolder("Archive/note.md", "Archive"), true);
-  assert.equal(isPathInFolder("Archive 2/note.md", "Archive"), false);
+  expect(isPathInFolder("Archive/note.md", "Archive")).toBe(true);
+  expect(isPathInFolder("Archive 2/note.md", "Archive")).toBe(false);
 });
 
 test("migrates the old delete prompt setting", () => {
-  assert.equal(resolveDeleteAction(undefined, true), "ask");
-  assert.equal(resolveDeleteAction(undefined, false), "delete");
-  assert.equal(resolveDeleteAction("archive"), "archive");
+  expect(resolveDeleteAction(undefined, true)).toBe("ask");
+  expect(resolveDeleteAction(undefined, false)).toBe("delete");
+  expect(resolveDeleteAction("archive")).toBe("archive");
 });
 
 test("returns the parent folder without mangling root-level files", () => {
-  assert.equal(parentFolder("note.md"), "");
-  assert.equal(parentFolder("Projects/note.md"), "Projects");
-  assert.equal(parentFolder("Projects/Work/note.md"), "Projects/Work");
+  expect(parentFolder("note.md")).toBe("");
+  expect(parentFolder("Projects/note.md")).toBe("Projects");
+  expect(parentFolder("Projects/Work/note.md")).toBe("Projects/Work");
 });

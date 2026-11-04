@@ -76,9 +76,9 @@ Copy `manifest.json` and `main.js` into:
 
 Then enable **Integrated Archive** under **Settings → Community plugins**.
 
-Run `bun run dev` while developing and `bun run check` before committing. Run `bun run test:coverage` for a coverage report.
+Run `bun run dev` while developing and `bun run check` before committing. Run `bun run test:coverage` for a coverage report (thresholds in `bunfig.toml` fail the run if lines or functions drop below 85%/75%).
 
-`bun run check` verifies release versions, type-checks and bundles the plugin, runs the official Obsidian ESLint rules, and executes the test suite.
+`bun run check` verifies release versions, type-checks and bundles the plugin, runs the official Obsidian ESLint rules, and executes the test suite with coverage enforced. CI runs the same steps as parallel `lint`, `typecheck`, `test` (with an `lcov` artifact), and `build` jobs.
 
 ## Release
 

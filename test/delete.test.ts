@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "bun:test";
 import { around } from "monkey-around";
 import {
   installDeletionInterceptor,
@@ -65,7 +64,7 @@ test("passes folders, archived files, and normal-delete mode to Obsidian", async
   fixture.setAction("delete");
   await fixture.manager.promptForDeletion(new File("Projects/note.md"));
 
-  assert.deepEqual(fixture.calls, [
+  expect(fixture.calls).toEqual([
     "original:Projects",
     "original:Archive/note.md",
     "original:Projects/note.md",
@@ -82,8 +81,8 @@ test("automatically archives instead of invoking the original deletion", async (
   // (`if (await prompt) await trash`) skip their own trashFile.
   const confirmed = await fixture.manager.promptForDeletion(new File("Projects/note.md"));
 
-  assert.equal(confirmed, false);
-  assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
+  expect(confirmed).toBe(false);
+  expect(fixture.calls).toEqual(["archive:Projects/note.md"]);
   uninstall();
 });
 
@@ -97,7 +96,7 @@ test("archives without a follow-up trash in the two-step caller flow", async () 
     await fixture.manager.trashFile(file);
   }
 
-  assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
+  expect(fixture.calls).toEqual(["archive:Projects/note.md"]);
   uninstall();
 });
 
@@ -106,13 +105,13 @@ test("handles archive, delete, and cancel choices", async () => {
   const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
 
   fixture.setChoice("archive");
-  assert.equal(await fixture.manager.promptForDeletion(new File("one.md")), false);
+  expect(await fixture.manager.promptForDeletion(new File("one.md"))).toBe(false);
   fixture.setChoice("delete");
-  assert.equal(await fixture.manager.promptForDeletion(new File("two.md")), false);
+  expect(await fixture.manager.promptForDeletion(new File("two.md"))).toBe(false);
   fixture.setChoice("cancel");
-  assert.equal(await fixture.manager.promptForDeletion(new File("three.md")), false);
+  expect(await fixture.manager.promptForDeletion(new File("three.md"))).toBe(false);
 
-  assert.deepEqual(fixture.calls, [
+  expect(fixture.calls).toEqual([
     "choose:one.md",
     "archive:one.md",
     "choose:two.md",
@@ -134,7 +133,7 @@ test("trashes exactly once in the two-step caller flow", async () => {
 
   // promptForDeletion already trashed and returned false, so the caller
   // skips its own trashFile: exactly one trash total, no double-trash.
-  assert.deepEqual(fixture.calls, ["choose:two.md", "trash:two.md"]);
+  expect(fixture.calls).toEqual(["choose:two.md", "trash:two.md"]);
   uninstall();
 });
 
@@ -145,7 +144,7 @@ test("redirects direct trashFile calls to the archive in archive mode", async ()
 
   await fixture.manager.trashFile(new File("Projects/note.md"));
 
-  assert.deepEqual(fixture.calls, ["archive:Projects/note.md"]);
+  expect(fixture.calls).toEqual(["archive:Projects/note.md"]);
   uninstall();
 });
 
@@ -160,7 +159,7 @@ test("passes direct trashFile calls through unless archiving automatically", asy
   await fixture.manager.trashFile(new Folder("Projects"));
   await fixture.manager.trashFile(new File("Archive/note.md"));
 
-  assert.deepEqual(fixture.calls, [
+  expect(fixture.calls).toEqual([
     "trash:Projects/note.md",
     "trash:Projects",
     "trash:Archive/note.md",
@@ -173,12 +172,12 @@ test("restores the exact original method after uninstall", async () => {
   const original = fixture.manager.promptForDeletion;
   const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
 
-  assert.notEqual(fixture.manager.promptForDeletion, original);
+  expect(fixture.manager.promptForDeletion).not.toBe(original);
   uninstall();
 
-  assert.equal(fixture.manager.promptForDeletion, original);
+  expect(fixture.manager.promptForDeletion).toBe(original);
   await fixture.manager.promptForDeletion(new File("note.md"));
-  assert.deepEqual(fixture.calls, ["original:note.md"]);
+  expect(fixture.calls).toEqual(["original:note.md"]);
 });
 
 test("remains correct when another wrapper is removed in either order", async () => {
@@ -196,7 +195,7 @@ test("remains correct when another wrapper is removed in either order", async ()
   await fixture.manager.promptForDeletion(new File("first.md"));
   uninstallOther();
   await fixture.manager.promptForDeletion(new File("cleanup.md"));
-  assert.equal(fixture.manager.promptForDeletion, original);
+  expect(fixture.manager.promptForDeletion).toBe(original);
 
   const uninstallOtherFirst = around(fixture.manager, {
     promptForDeletion: (next) => async function (this: DeletionManager<AbstractFile>, file: AbstractFile) {
@@ -211,8 +210,8 @@ test("remains correct when another wrapper is removed in either order", async ()
   uninstallArchiveSecond();
   await fixture.manager.promptForDeletion(new File("cleanup-two.md"));
 
-  assert.equal(fixture.manager.promptForDeletion, original);
-  assert.deepEqual(fixture.calls, [
+  expect(fixture.manager.promptForDeletion).toBe(original);
+  expect(fixture.calls).toEqual([
     "other:first.md",
     "original:first.md",
     "original:cleanup.md",
@@ -238,7 +237,7 @@ test("archives unrelated concurrent deletes and coalesces duplicate requests", a
   await Promise.resolve();
   release();
   await Promise.all(requests);
-  assert.deepEqual(fixture.calls, ["archive:first.md", "archive:second.md"]);
+  expect(fixture.calls).toEqual(["archive:first.md", "archive:second.md"]);
   uninstall();
 });
 
@@ -262,7 +261,7 @@ test("consumes duplicate deletes after the pending archive has moved the file", 
   const prompt = fixture.manager.promptForDeletion(file);
   release();
   await Promise.all([first, duplicate]);
-  assert.equal(await prompt, false);
-  assert.deepEqual(fixture.calls, []);
+  expect(await prompt).toBe(false);
+  expect(fixture.calls).toEqual([]);
   uninstall();
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "bun:test";
 import {
   DEFAULT_SETTINGS,
   normalizeTag,
@@ -18,7 +17,7 @@ import {
 } from "../src/settings.ts";
 
 test("sanitizes missing, malformed, and legacy settings", () => {
-  assert.deepEqual(sanitizeSettings(null), DEFAULT_SETTINGS);
+  expect(sanitizeSettings(null)).toEqual(DEFAULT_SETTINGS);
 
   const malformed = sanitizeSettings({
     archiveFolder: " ../Archive ",
@@ -33,20 +32,20 @@ test("sanitizes missing, malformed, and legacy settings", () => {
     deleteAction: "invalid",
     existingDateAction: "invalid",
   });
-  assert.equal(malformed.archiveFolder, "Archive");
-  assert.equal(malformed.preserveFolders, false);
-  assert.equal(malformed.cleanEmptyFolders, false);
-  assert.equal(malformed.tag, "archived");
-  assert.equal(malformed.addTag, false);
-  assert.equal(malformed.dateFormat, "YYYY-MM-DD");
-  assert.equal(malformed.deleteAction, "ask");
-  assert.equal(malformed.existingDateAction, "preserve");
-  assert.equal(malformed.archivedProperty, "archived");
-  assert.equal(malformed.createdProperty, "created");
-  assert.equal(malformed.modifiedProperty, "modified");
+  expect(malformed.archiveFolder).toBe("Archive");
+  expect(malformed.preserveFolders).toBe(false);
+  expect(malformed.cleanEmptyFolders).toBe(false);
+  expect(malformed.tag).toBe("archived");
+  expect(malformed.addTag).toBe(false);
+  expect(malformed.dateFormat).toBe("YYYY-MM-DD");
+  expect(malformed.deleteAction).toBe("ask");
+  expect(malformed.existingDateAction).toBe("preserve");
+  expect(malformed.archivedProperty).toBe("archived");
+  expect(malformed.createdProperty).toBe("created");
+  expect(malformed.modifiedProperty).toBe("modified");
 
-  assert.equal(sanitizeSettings({ promptOnDelete: false }).deleteAction, "delete");
-  assert.equal(sanitizeSettings({ promptOnDelete: true }).deleteAction, "ask");
+  expect(sanitizeSettings({ promptOnDelete: false }).deleteAction).toBe("delete");
+  expect(sanitizeSettings({ promptOnDelete: true }).deleteAction).toBe("ask");
 });
 
 test("sanitizes archive history records", () => {
@@ -69,7 +68,7 @@ test("sanitizes archive history records", () => {
     ],
   });
 
-  assert.deepEqual(data.archiveHistory, [
+  expect(data.archiveHistory).toEqual([
     {
       archivedAt: 100,
       archivedPath: "Archive/note.md",
@@ -88,7 +87,7 @@ test("preserves attachment group ids in archive history", () => {
     ],
   });
 
-  assert.deepEqual(data.archiveHistory, [
+  expect(data.archiveHistory).toEqual([
     { archivedAt: 100, archivedPath: "Archive/note.md", groupId: "300:note.md", originalPath: "note.md" },
     { archivedAt: 100, archivedPath: "Archive/image.png", groupId: "300:note.md", originalPath: "image.png" },
   ]);
@@ -106,14 +105,14 @@ test("keeps valid settings and normalizes a leading tag marker", () => {
     existingDateAction: "overwrite",
   });
 
-  assert.equal(settings.archiveFolder, "Storage/Archive");
-  assert.equal(settings.preserveFolders, true);
-  assert.equal(settings.cleanEmptyFolders, true);
-  assert.equal(settings.archiveAttachments, true);
-  assert.equal(settings.includeSharedAttachments, true);
-  assert.equal(settings.deleteAction, "archive");
-  assert.equal(settings.tag, "project/archive");
-  assert.equal(settings.existingDateAction, "overwrite");
+  expect(settings.archiveFolder).toBe("Storage/Archive");
+  expect(settings.preserveFolders).toBe(true);
+  expect(settings.cleanEmptyFolders).toBe(true);
+  expect(settings.archiveAttachments).toBe(true);
+  expect(settings.includeSharedAttachments).toBe(true);
+  expect(settings.deleteAction).toBe("archive");
+  expect(settings.tag).toBe("project/archive");
+  expect(settings.existingDateAction).toBe("overwrite");
 });
 
 test("repairs duplicate enabled date properties loaded from disk", () => {
@@ -123,9 +122,9 @@ test("repairs duplicate enabled date properties loaded from disk", () => {
     modifiedProperty: "date",
   });
 
-  assert.equal(settings.archivedProperty, "date");
-  assert.equal(settings.createdProperty, "created");
-  assert.equal(settings.modifiedProperty, "modified");
+  expect(settings.archivedProperty).toBe("date");
+  expect(settings.createdProperty).toBe("created");
+  expect(settings.modifiedProperty).toBe("modified");
 });
 
 test("resolves collisions with default property names", () => {
@@ -134,8 +133,8 @@ test("resolves collisions with default property names", () => {
     createdProperty: "created",
   });
 
-  assert.equal(settings.archivedProperty, "created");
-  assert.notEqual(settings.createdProperty, settings.archivedProperty);
+  expect(settings.archivedProperty).toBe("created");
+  expect(settings.createdProperty).not.toBe(settings.archivedProperty);
 });
 
 test("keeps every enabled property name distinct including the stored path", () => {
@@ -148,87 +147,87 @@ test("keeps every enabled property name distinct including the stored path", () 
   });
 
   const names = [settings.archivedProperty, settings.createdProperty, settings.modifiedProperty, settings.originalPathProperty];
-  assert.equal(new Set(names).size, names.length);
+  expect(new Set(names).size).toBe(names.length);
 });
 
 test("repairs a date property that collides with the tag property", () => {
   const settings = sanitizeSettings({ archivedProperty: "tags" });
 
-  assert.notEqual(settings.archivedProperty, "tags");
+  expect(settings.archivedProperty).not.toBe("tags");
 });
 
 test("validates archive folders", () => {
-  assert.equal(validateArchiveFolder("Archive"), undefined);
-  assert.equal(validateArchiveFolder("Storage/Archive"), undefined);
-  assert.match(validateArchiveFolder("" ) ?? "", /Enter/);
-  assert.match(validateArchiveFolder("../Archive") ?? "", /\.\./);
-  assert.match(validateArchiveFolder("/Archive") ?? "", /relative/);
-  assert.match(validateArchiveFolder("Storage\\Archive") ?? "", /forward slashes/);
+  expect(validateArchiveFolder("Archive")).toBe(undefined);
+  expect(validateArchiveFolder("Storage/Archive")).toBe(undefined);
+  expect(validateArchiveFolder("" ) ?? "").toMatch(/Enter/);
+  expect(validateArchiveFolder("../Archive") ?? "").toMatch(/\.\./);
+  expect(validateArchiveFolder("/Archive") ?? "").toMatch(/relative/);
+  expect(validateArchiveFolder("Storage\\Archive") ?? "").toMatch(/forward slashes/);
 });
 
 test("validates and normalizes archive tags", () => {
-  assert.equal(validateTag("archived"), undefined);
-  assert.equal(validateTag("project/archive"), undefined);
-  assert.equal(normalizeTag(" #archived "), "archived");
-  assert.equal(normalizeTag("#"), null);
-  assert.match(validateTag("two words") ?? "", /spaces/);
-  assert.match(validateTag("123") ?? "", /non-numeric/);
+  expect(validateTag("archived")).toBe(undefined);
+  expect(validateTag("project/archive")).toBe(undefined);
+  expect(normalizeTag(" #archived ")).toBe("archived");
+  expect(normalizeTag("#")).toBe(null);
+  expect(validateTag("two words") ?? "").toMatch(/spaces/);
+  expect(validateTag("123") ?? "").toMatch(/non-numeric/);
 });
 
 test("validates property names and prevents enabled date collisions", () => {
   const settings = { ...DEFAULT_SETTINGS };
-  assert.equal(validatePropertyName("created-at"), undefined);
-  assert.match(validatePropertyName(" ") ?? "", /Enter/);
-  assert.match(validatePropertyName("bad\nname") ?? "", /one line/);
-  assert.match(validatePropertyName("__proto__") ?? "", /different/);
-  assert.match(validatePropertyName("constructor") ?? "", /different/);
-  assert.match(validatePropertyName("prototype") ?? "", /different/);
-  assert.equal(validateDateProperty(settings, "createdProperty", "created-at"), undefined);
-  assert.match(validateDateProperty(settings, "createdProperty", "archived") ?? "", /unique/);
+  expect(validatePropertyName("created-at")).toBe(undefined);
+  expect(validatePropertyName(" ") ?? "").toMatch(/Enter/);
+  expect(validatePropertyName("bad\nname") ?? "").toMatch(/one line/);
+  expect(validatePropertyName("__proto__") ?? "").toMatch(/different/);
+  expect(validatePropertyName("constructor") ?? "").toMatch(/different/);
+  expect(validatePropertyName("prototype") ?? "").toMatch(/different/);
+  expect(validateDateProperty(settings, "createdProperty", "created-at")).toBe(undefined);
+  expect(validateDateProperty(settings, "createdProperty", "archived") ?? "").toMatch(/unique/);
 
   settings.addArchivedDate = false;
-  assert.equal(validateDateProperty(settings, "createdProperty", "archived"), undefined);
+  expect(validateDateProperty(settings, "createdProperty", "archived")).toBe(undefined);
 });
 
 test("rejects property names that collide with the tag property or stored path", () => {
   const settings = { ...DEFAULT_SETTINGS, addTag: true, addArchivedDate: false };
-  assert.match(validatePropertySlot(settings, "createdProperty", "tags") ?? "", /different/);
+  expect(validatePropertySlot(settings, "createdProperty", "tags") ?? "").toMatch(/different/);
 
   settings.storeOriginalPath = true;
-  assert.equal(validatePropertySlot(settings, "createdProperty", "created"), undefined);
-  assert.match(validatePropertySlot(settings, "createdProperty", "archive-original-path") ?? "", /unique/);
+  expect(validatePropertySlot(settings, "createdProperty", "created")).toBe(undefined);
+  expect(validatePropertySlot(settings, "createdProperty", "archive-original-path") ?? "").toMatch(/unique/);
 });
 
 test("validates date formats", () => {
-  assert.equal(validateDateFormat("YYYY-MM-DD"), undefined);
-  assert.equal(validateDateFormat("[Archived] YYYY"), undefined);
-  assert.match(validateDateFormat("  ") ?? "", /Enter/);
-  assert.match(validateDateFormat("---") ?? "", /token/);
-  assert.match(validateDateFormat("YYYY\nMM") ?? "", /one line/);
+  expect(validateDateFormat("YYYY-MM-DD")).toBe(undefined);
+  expect(validateDateFormat("[Archived] YYYY")).toBe(undefined);
+  expect(validateDateFormat("  ") ?? "").toMatch(/Enter/);
+  expect(validateDateFormat("---") ?? "").toMatch(/token/);
+  expect(validateDateFormat("YYYY\nMM") ?? "").toMatch(/one line/);
 });
 
 test("parses, sanitizes, and validates protected paths", () => {
-  assert.deepEqual(parseExcludedPaths(" Private \n/Templates/\n\n"), ["Private", "Templates"]);
-  assert.deepEqual(parseExcludedPaths(""), []);
-  assert.deepEqual(parseExcludedPaths("Private//Templates"), ["Private/Templates"]);
-  assert.equal(sanitizeExcludedPaths("Private\n../Secret\nTemplates"), "Private\nTemplates");
-  assert.equal(sanitizeExcludedPaths("Private\r\nTemplates"), "Private\nTemplates");
-  assert.equal(validateExcludedPaths("Private\nTemplates"), undefined);
-  assert.match(validateExcludedPaths("../Secret") ?? "", /segments/);
-  assert.match(validateExcludedPaths("a\\b") ?? "", /forward slashes/);
+  expect(parseExcludedPaths(" Private \n/Templates/\n\n")).toEqual(["Private", "Templates"]);
+  expect(parseExcludedPaths("")).toEqual([]);
+  expect(parseExcludedPaths("Private//Templates")).toEqual(["Private/Templates"]);
+  expect(sanitizeExcludedPaths("Private\n../Secret\nTemplates")).toBe("Private\nTemplates");
+  expect(sanitizeExcludedPaths("Private\r\nTemplates")).toBe("Private\nTemplates");
+  expect(validateExcludedPaths("Private\nTemplates")).toBe(undefined);
+  expect(validateExcludedPaths("../Secret") ?? "").toMatch(/segments/);
+  expect(validateExcludedPaths("a\\b") ?? "").toMatch(/forward slashes/);
 });
 
 test("rejects protected paths overlapping the archive folder", () => {
-  assert.equal(validateExcludedOverlap("Archive", "Private\nTemplates"), undefined);
-  assert.match(validateExcludedOverlap("Archive", "Archive") ?? "", /overlap/i);
-  assert.match(validateExcludedOverlap("Archive", "Archive/Projects") ?? "", /overlap/i);
-  assert.match(validateExcludedOverlap("Storage/Archive", "Storage") ?? "", /overlap/i);
-  assert.equal(validateExcludedOverlap(".", "Archive"), undefined);
+  expect(validateExcludedOverlap("Archive", "Private\nTemplates")).toBe(undefined);
+  expect(validateExcludedOverlap("Archive", "Archive") ?? "").toMatch(/overlap/i);
+  expect(validateExcludedOverlap("Archive", "Archive/Projects") ?? "").toMatch(/overlap/i);
+  expect(validateExcludedOverlap("Storage/Archive", "Storage") ?? "").toMatch(/overlap/i);
+  expect(validateExcludedOverlap(".", "Archive")).toBe(undefined);
 });
 
 test("loads and normalizes protected paths from stored settings", () => {
   const settings = sanitizeSettings({ excludedPaths: " Private \r\n\r\n Templates " });
 
-  assert.equal(settings.excludedPaths, "Private\nTemplates");
-  assert.equal(sanitizeSettings({}).excludedPaths, "");
+  expect(settings.excludedPaths).toBe("Private\nTemplates");
+  expect(sanitizeSettings({}).excludedPaths).toBe("");
 });

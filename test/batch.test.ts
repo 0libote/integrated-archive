@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { expect, test } from "bun:test";
 import { runBatch } from "../src/batch.ts";
 
 test("runs every batch item and reports successes and failures", async () => {
@@ -10,12 +9,12 @@ test("runs every batch item and reports successes and failures", async () => {
     return item * 10;
   });
 
-  assert.deepEqual(visited, [1, 2, 3]);
-  assert.deepEqual(result.succeeded, [
+  expect(visited).toEqual([1, 2, 3]);
+  expect(result.succeeded).toEqual([
     { item: 1, result: 10 },
     { item: 3, result: 30 },
   ]);
-  assert.equal(result.failed.length, 1);
-  assert.equal(result.failed[0]?.item, 2);
-  assert.match(String(result.failed[0]?.error), /failed/);
+  expect(result.failed.length).toBe(1);
+  expect(result.failed[0]?.item).toBe(2);
+  expect(String(result.failed[0]?.error)).toMatch(/failed/);
 });

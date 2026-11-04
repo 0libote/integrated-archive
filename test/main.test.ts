@@ -109,7 +109,9 @@ class MockModal {
     empty: () => undefined,
   };
   constructor(public app: TestApp) {}
-  close() {}
+  close() {
+    (this as unknown as { onClose?: () => void }).onClose?.();
+  }
   open() {
     (this as unknown as { onOpen?: () => void }).onOpen?.();
   }
