@@ -23,6 +23,7 @@ import {
   type ArchiveSettings,
   validateArchiveFolder,
   validateDateFormat,
+  validateDateProperty,
   validateExcludedOverlap,
   validateExcludedPaths,
   validatePropertySlot,
@@ -31,21 +32,41 @@ import {
 
 const createMoment = moment as unknown as (timestamp: number) => { format(pattern: string): string };
 
-class ArchiveDeleteModal extends Modal {
-  private resolve?: (choice: DeleteChoice) => void;
+abstract class ChoiceModal<T> extends Modal {
+  private resolve?: (choice: T) => void;
+  private readonly fallback: T;
 
-  constructor(app: App, private readonly file: TFile) {
+  constructor(app: App, fallback: T) {
     super(app);
+    this.fallback = fallback;
   }
 
-  choose(): Promise<DeleteChoice> {
+  choose(): Promise<T> {
     return new Promise((resolve) => {
       this.resolve = resolve;
       this.open();
     });
   }
 
-  onOpen(): void {
+  protected finish(choice: T): void {
+    this.resolve?.(choice);
+    this.resolve = undefined;
+    this.close();
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
+    this.resolve?.(this.fallback);
+    this.resolve = undefined;
+  }
+}
+
+class ArchiveDeleteModal extends ChoiceModal<DeleteChoice> {
+  constructor(app: App, private readonly file: TFile) {
+    super(app, "cancel");
+  }
+
+  override onOpen(): void {
     // Build UI here (rather than in choose()) so nothing touches the DOM
     // until Obsidian actually opens the modal. Building content earlier
     // risks attaching DOM while the loading splash is still visible.
@@ -56,18 +77,6 @@ class ArchiveDeleteModal extends Modal {
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish("cancel")))
       .addButton((button) => button.setButtonText("Delete").setDestructive().onClick(() => this.finish("delete")))
       .addButton((button) => button.setButtonText("Archive").setCta().onClick(() => this.finish("archive")));
-  }
-
-  private finish(choice: DeleteChoice): void {
-    this.resolve?.(choice);
-    this.resolve = undefined;
-    this.close();
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.resolve?.("cancel");
-    this.resolve = undefined;
   }
 }
 
@@ -84,21 +93,12 @@ export function isExternalFile(file: TFile): boolean {
   return typeof (file as { getRealPath?: unknown }).getRealPath === "function";
 }
 
-class ConfirmBulkModal extends Modal {
-  private resolve?: (confirmed: boolean) => void;
-
+class ConfirmBulkModal extends ChoiceModal<boolean> {
   constructor(app: App, private readonly title: string, private readonly message: string) {
-    super(app);
+    super(app, false);
   }
 
-  choose(): Promise<boolean> {
-    return new Promise((resolve) => {
-      this.resolve = resolve;
-      this.open();
-    });
-  }
-
-  onOpen(): void {
+  override onOpen(): void {
     // See ArchiveDeleteModal: build UI on open so no DOM is touched before
     // the modal is actually shown (e.g. over the startup splash).
     this.setTitle(this.title);
@@ -106,18 +106,6 @@ class ConfirmBulkModal extends Modal {
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish(false)))
       .addButton((button) => button.setButtonText("Continue").setCta().onClick(() => this.finish(true)));
-  }
-
-  private finish(confirmed: boolean): void {
-    this.resolve?.(confirmed);
-    this.resolve = undefined;
-    this.close();
-  }
-
-  onClose(): void {
-    this.contentEl.empty();
-    this.resolve?.(false);
-    this.resolve = undefined;
   }
 }
 
@@ -222,9 +210,12 @@ export default class IntegratedArchivePlugin extends Plugin {
       checkCallback: (checking) => {
         const folder = this.activeFolder();
         if (!folder) return false;
+        // Enablement checks run on every palette hover: stop at the first
+        // eligible file instead of walking the whole subtree.
+        if (checking) return this.hasArchivableFiles(folder);
         const files = this.collectArchivableFiles(folder);
         if (!files.length) return false;
-        if (!checking) void this.archiveMany(files);
+        void this.archiveMany(files);
         return true;
       },
     });
@@ -279,7 +270,8 @@ export default class IntegratedArchivePlugin extends Plugin {
     }));
 
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-      void this.archiveManager.reconcileRename(oldPath, file.path);
+      void this.archiveManager.reconcileRename(oldPath, file.path)
+        .catch((error) => console.error("Integrated Archive rename:", error));
     }));
 
     this.register(installDeletionInterceptor<TAbstractFile, TFile>(this.app.fileManager, {
@@ -316,6 +308,19 @@ export default class IntegratedArchivePlugin extends Plugin {
       return false;
     }
     try {
+      if (this.settings.archiveAttachments && file.extension === "md") {
+        const plan = await this.archiveManager.collectAttachments(file);
+        if (needsBulkConfirm(1 + plan.attachments.length)) {
+          await this.waitForLayoutReady();
+          const noun = plan.attachments.length === 0 ? "file" : "files";
+          const confirmed = await new ConfirmBulkModal(
+            this.app,
+            `Archive ${1 + plan.attachments.length} ${noun}?`,
+            `This will archive ${1 + plan.attachments.length} ${noun} together. Continue?`,
+          ).choose();
+          if (!confirmed) return false;
+        }
+      }
       const result = await this.archiveManager.archiveWithAttachments(file);
       this.reportArchiveGroupResult(result);
       return true;
@@ -332,6 +337,20 @@ export default class IntegratedArchivePlugin extends Plugin {
       return false;
     }
     try {
+      const groupId = this.archiveManager.getRecordGroup(file.path);
+      if (groupId) {
+        const count = this.archiveManager.listGroupArchivedPaths(groupId).length;
+        if (needsBulkConfirm(Math.max(count, 1))) {
+          await this.waitForLayoutReady();
+          const noun = count === 1 ? "file" : "files";
+          const confirmed = await new ConfirmBulkModal(
+            this.app,
+            `Restore ${count} ${noun}?`,
+            `This will restore ${count} ${noun} to their original locations. Continue?`,
+          ).choose();
+          if (!confirmed) return false;
+        }
+      }
       const result = await this.archiveManager.restoreWithGroup(file);
       this.reportRestoreGroupResult(result);
       return true;
@@ -343,8 +362,9 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   private async archiveMany(files: TFile[]): Promise<void> {
-    if (!files.length) return;
-    const expanded = await this.expandWithAttachments(files);
+    const eligible = files.filter((file) => this.isVaultFile(file));
+    if (!eligible.length) return;
+    const expanded = await this.expandWithAttachments(eligible);
     if (needsBulkConfirm(expanded.items.length)) {
       await this.waitForLayoutReady();
       const noun = expanded.items.length === 1 ? "file" : "files";
@@ -369,17 +389,20 @@ export default class IntegratedArchivePlugin extends Plugin {
   /**
    * Expand a file list with exclusively-used attachments so batch archiving
    * moves each note together with its attachments. Attachments share their
-   * note's group id so restoring the note brings them back.
+   * note's group id so restoring the note brings them back. One shared cache
+   * is reused so N notes do not rescan the vault N times per image.
    */
   private async expandWithAttachments(files: TFile[]): Promise<{ groups: Map<string, string>; items: TFile[]; sharedSkipped: number }> {
     const items = [...files];
     const groups = new Map<string, string>();
     const seen = new Set(files.map((file) => file.path));
+    const originallySelected = new Set(seen);
     const sharedSkipped = new Set<string>();
+    const incomingCache = new Map<string, string[]>();
     for (const file of files) {
       let plan: AttachmentPlan<TFile>;
       try {
-        plan = await this.archiveManager.collectAttachments(file);
+        plan = await this.archiveManager.collectAttachments(file, incomingCache);
       } catch {
         continue;
       }
@@ -388,7 +411,17 @@ export default class IntegratedArchivePlugin extends Plugin {
       const groupId = this.archiveManager.makeGroupId(file.path);
       groups.set(file.path, groupId);
       for (const attachment of plan.attachments) {
-        if (!groups.has(attachment.path)) groups.set(attachment.path, groupId);
+        const existing = groups.get(attachment.path);
+        if (existing && existing !== groupId && !originallySelected.has(attachment.path)) {
+          // Claimed by two different notes in this batch: leave it ungrouped
+          // so no single note implies ownership of a shared file.
+          groups.delete(attachment.path);
+          if (seen.has(attachment.path)) continue;
+          seen.add(attachment.path);
+          items.push(attachment);
+          continue;
+        }
+        if (!existing) groups.set(attachment.path, groupId);
         if (seen.has(attachment.path)) continue;
         seen.add(attachment.path);
         groups.set(attachment.path, groupId);
@@ -399,8 +432,9 @@ export default class IntegratedArchivePlugin extends Plugin {
   }
 
   private async restoreMany(files: TFile[]): Promise<void> {
-    if (!files.length) return;
-    const items = this.expandWithGroupMembers(files);
+    const eligible = files.filter((file) => this.isVaultFile(file));
+    if (!eligible.length) return;
+    const items = this.expandWithGroupMembers(eligible);
     if (needsBulkConfirm(items.length)) {
       await this.waitForLayoutReady();
       const noun = items.length === 1 ? "file" : "files";
@@ -461,7 +495,7 @@ export default class IntegratedArchivePlugin extends Plugin {
 
   private collectOutgoingLinks(sourcePath: string): string[] {
     const seen = new Set<string>();
-    const resolved = this.app.metadataCache.resolvedLinks[sourcePath];
+    const resolved = this.app.metadataCache.resolvedLinks?.[sourcePath];
     if (resolved) {
       for (const destination of Object.keys(resolved)) seen.add(destination);
     }
@@ -482,24 +516,32 @@ export default class IntegratedArchivePlugin extends Plugin {
 
   private collectIncomingLinks(destPath: string): string[] {
     const referrers: string[] = [];
+    const seenReferrers = new Set<string>();
     const resolved = this.app.metadataCache.resolvedLinks ?? {};
     for (const [source, destinations] of Object.entries(resolved)) {
-      if (destinations && Object.prototype.hasOwnProperty.call(destinations, destPath)) referrers.push(source);
+      if (destinations && Object.prototype.hasOwnProperty.call(destinations, destPath)) {
+        referrers.push(source);
+        seenReferrers.add(source);
+      }
     }
     // The resolved index can lag behind per-file caches after edits.
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (referrers.includes(file.path)) continue;
+      if (seenReferrers.has(file.path)) continue;
       const cache = this.app.metadataCache.getFileCache(file);
       if (!cache) throw new Error("Link cache is not ready.");
       const refs = [...(cache.links ?? []), ...(cache.embeds ?? [])];
       if (refs.some((ref) => this.app.metadataCache.getFirstLinkpathDest(getLinkpath(ref.link), file.path)?.path === destPath)) {
         referrers.push(file.path);
+        seenReferrers.add(file.path);
       }
     }
     return referrers;
   }
 
   private activeFolder(): TFolder | null {
+    // Derived from the active file only: Obsidian exposes no "focused folder"
+    // API for the command palette, so folder focus without an open file is
+    // covered by the file menu instead.
     const file = this.app.workspace.getActiveFile();
     if (file && !this.isVaultFile(file)) return null;
     const folder = file?.parent ?? null;
@@ -510,14 +552,30 @@ export default class IntegratedArchivePlugin extends Plugin {
     return folder;
   }
 
+  private hasArchivableFiles(folder: TFolder): boolean {
+    const stack: TFolder[] = [folder];
+    while (stack.length) {
+      const current = stack.pop()!;
+      for (const child of current.children) {
+        if (child instanceof TFolder) {
+          if (!this.archiveManager.isArchivedPath(child.path)) stack.push(child);
+        } else if (this.isVaultFile(child) && !this.isArchived(child)
+          && !this.archiveManager.isExcludedPath(child.path)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
   private collectArchivableFiles(folder: TFolder): TFile[] {
     const files: TFile[] = [];
     const walk = (current: TFolder): void => {
       for (const child of current.children) {
-        if (child instanceof TFile) {
-          if (!this.isArchived(child) && !this.archiveManager.isExcludedPath(child.path)) files.push(child);
-        } else if (child instanceof TFolder) {
+        if (child instanceof TFolder) {
           walk(child);
+        } else if (this.isVaultFile(child)) {
+          if (!this.isArchived(child) && !this.archiveManager.isExcludedPath(child.path)) files.push(child);
         }
       }
     };
@@ -529,6 +587,10 @@ export default class IntegratedArchivePlugin extends Plugin {
     this.settings = sanitizeData(await this.loadData());
   }
 
+  private failedParts(metadataError: unknown, historyError: unknown): string {
+    return [metadataError && "metadata", historyError && "archive history"].filter(Boolean).join(" and ");
+  }
+
   private reportArchiveGroupResult(result: ArchiveGroupResult): void {
     for (const failure of result.failures) {
       console.error(`Integrated Archive attachment ${failure.originalPath}:`, failure.error);
@@ -536,8 +598,7 @@ export default class IntegratedArchivePlugin extends Plugin {
     const attachmentWarnings = result.attachments.filter((attachment) => attachment.historyError).length;
     if (result.primary.metadataError) console.error("Integrated Archive metadata:", result.primary.metadataError);
     if (result.primary.historyError) console.error("Integrated Archive history:", result.primary.historyError);
-    const failed = [result.primary.metadataError && "metadata", result.primary.historyError && "archive history"]
-      .filter(Boolean).join(" and ");
+    const failed = this.failedParts(result.primary.metadataError, result.primary.historyError);
     const extras: string[] = [];
     if (result.attachments.length) {
       extras.push(`+ ${result.attachments.length} ${result.attachments.length === 1 ? "attachment" : "attachments"}`);
@@ -574,8 +635,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       this.reportRestoreResult(result.primary);
       return;
     }
-    const failed = [result.primary.metadataError && "metadata", result.primary.historyError && "archive history"]
-      .filter(Boolean).join(" and ");
+    const failed = this.failedParts(result.primary.metadataError, result.primary.historyError);
     if (result.primary.metadataError) console.error("Integrated Archive metadata restore:", result.primary.metadataError);
     if (result.primary.historyError) console.error("Integrated Archive history:", result.primary.historyError);
     const extras: string[] = [];
@@ -593,7 +653,7 @@ export default class IntegratedArchivePlugin extends Plugin {
   private reportRestoreResult(result: Awaited<ReturnType<ArchiveManager<TFile>["restore"]>>): void {
     if (result.metadataError) console.error("Integrated Archive metadata restore:", result.metadataError);
     if (result.historyError) console.error("Integrated Archive history:", result.historyError);
-    const failed = [result.metadataError && "metadata", result.historyError && "archive history"].filter(Boolean).join(" and ");
+    const failed = this.failedParts(result.metadataError, result.historyError);
     if (failed) {
       new Notice(`Restored to ${result.destination}, but ${failed} could not be updated.`);
     } else if (result.inferredOriginalPath) {
@@ -664,21 +724,21 @@ class ArchiveSettingTab extends PluginSettingTab {
             name: "Archived date property",
             desc: "Frontmatter property name.",
             visible: () => s.addArchivedDate,
-            control: { type: "text", key: "archivedProperty", validate: (value) => validatePropertySlot(s, "archivedProperty", value) },
+            control: { type: "text", key: "archivedProperty", validate: (value) => validateDateProperty(s, "archivedProperty", value) },
           },
           { name: "Add created date", desc: "Record the file system creation day.", control: { type: "toggle", key: "addCreatedDate" } },
           {
             name: "Created date property",
             desc: "Frontmatter property name.",
             visible: () => s.addCreatedDate,
-            control: { type: "text", key: "createdProperty", validate: (value) => validatePropertySlot(s, "createdProperty", value) },
+            control: { type: "text", key: "createdProperty", validate: (value) => validateDateProperty(s, "createdProperty", value) },
           },
           { name: "Add last edited date", desc: "Record the modification day from before archiving.", control: { type: "toggle", key: "addModifiedDate" } },
           {
             name: "Last edited property",
             desc: "Frontmatter property name.",
             visible: () => s.addModifiedDate,
-            control: { type: "text", key: "modifiedProperty", validate: (value) => validatePropertySlot(s, "modifiedProperty", value) },
+            control: { type: "text", key: "modifiedProperty", validate: (value) => validateDateProperty(s, "modifiedProperty", value) },
           },
           {
             name: "Existing created and edited dates",

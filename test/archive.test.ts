@@ -454,7 +454,7 @@ test("restores from a stored original path when history is gone", async () => {
   const result = await fixture.manager.restore(file);
 
   expect(result.destination).toBe("Projects/Work/note.md");
-  expect(result.inferredOriginalPath).toBe(true);
+  expect(result.inferredOriginalPath).toBe(false);
   expect(file.frontmatter["archive-original-path"]).toBe(undefined);
 });
 

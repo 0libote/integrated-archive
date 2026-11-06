@@ -121,6 +121,7 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
     typeof stored.promptOnDelete === "boolean" ? stored.promptOnDelete : undefined,
   );
   settings.existingDateAction = stored.existingDateAction === "overwrite" ? "overwrite" : "preserve";
+  settings.archiveFolder = normalizeExcludedSegment(settings.archiveFolder);
   settings.excludedPaths = sanitizeExcludedPaths(settings.excludedPaths);
 
   repairSettings(settings);
@@ -135,6 +136,17 @@ function repairSettings(settings: ArchiveSettings): void {
     if (validatePropertyName(settings[key])) settings[key] = DEFAULT_SETTINGS[key];
   }
   if (validateDateFormat(settings.dateFormat)) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
+  // Self-heal overlapping protected paths on load: the settings UI blocks new
+  // overlaps, but synced data.json may predate the check. Drop only the
+  // overlapping lines so a bad sync cannot make every archive throw.
+  const folder = normalizeExcludedSegment(settings.archiveFolder);
+  if (folder && folder !== ".") {
+    const kept = parseExcludedPaths(settings.excludedPaths).filter((excluded) =>
+      excluded !== folder && !isPathInFolder(excluded, folder) && !isPathInFolder(folder, excluded));
+    if (kept.length !== parseExcludedPaths(settings.excludedPaths).length) {
+      settings.excludedPaths = kept.join("\n");
+    }
+  }
   repairPropertyCollisions(settings);
 }
 
@@ -151,9 +163,9 @@ export function normalizeTag(value: string): string | null {
 }
 
 export function validateArchiveFolder(value: string): string | undefined {
-  const folder = value.trim();
+  const folder = normalizeExcludedSegment(value);
   if (!folder || folder === ".") return "Enter an archive folder.";
-  if (folder.startsWith("/") || folder.includes("\\")) return "Use a path relative to the vault root with forward slashes.";
+  if (value.trim().startsWith("/") || value.includes("\\")) return "Use a path relative to the vault root with forward slashes.";
   if (folder.split("/").some((part) => !part || part === "." || part === "..")) {
     return "Use folder names without empty, . or .. path segments.";
   }
@@ -210,10 +222,14 @@ export function validateDateFormat(value: string): string | undefined {
   return undefined;
 }
 
+function normalizeExcludedSegment(value: string): string {
+  return stripSlashes(value.trim()).replace(/\/{2,}/g, "/");
+}
+
 export function parseExcludedPaths(value: string): string[] {
   return value
     .split("\n")
-    .map((line) => stripSlashes(line.trim()).replace(/\/{2,}/g, "/"))
+    .map((line) => normalizeExcludedSegment(line))
     .filter(Boolean);
 }
 
@@ -242,7 +258,7 @@ export function validateExcludedPaths(value: string): string | undefined {
 }
 
 export function validateExcludedOverlap(archiveFolder: string, value: string): string | undefined {
-  const folder = stripSlashes(archiveFolder.trim()).replace(/\/{2,}/g, "/");
+  const folder = normalizeExcludedSegment(archiveFolder);
   if (!folder || folder === ".") return undefined;
   for (const excluded of parseExcludedPaths(value)) {
     if (excluded === folder) return "Protected paths overlap the archive folder.";
@@ -273,8 +289,7 @@ function isArchiveRecord(value: unknown): value is ArchiveRecord {
 
 export const MAX_ARCHIVE_HISTORY = 200;
 
-const DATE_PROPERTY_KEYS: DatePropertyKey[] = ["archivedProperty", "createdProperty", "modifiedProperty"];
-const PROPERTY_SLOT_KEYS: PropertySlotKey[] = [...DATE_PROPERTY_KEYS, "originalPathProperty"];
+const PROPERTY_SLOT_KEYS: PropertySlotKey[] = ["archivedProperty", "createdProperty", "modifiedProperty", "originalPathProperty"];
 const RESERVED_PROPERTY_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 
 function isMetadataSnapshot(value: unknown): value is ArchiveMetadataSnapshot {
