@@ -2,6 +2,23 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.6.1 — 2026-11-06
+
+### Fixed
+
+- Rejected archives no longer create folders before failing when the archive folder sits inside a protected location.
+- Restores validate saved history paths instead of trusting them, so changing the archive folder cannot loop a restore back into the archive; paths that became protected still block the restore instead of redirecting elsewhere.
+- Group restores continue past a blocked file instead of stranding the rest of the group.
+- Failed automatic archiving falls back to the normal delete flow instead of making the vault undeletable, and duplicate delete requests for the same path share one archive operation.
+- Archiving an already-recorded file is rejected, and group ids are unique across rapid operations.
+- History over the 200-record cap evicts records for missing files first so live restores keep their way home.
+- Folder archiving skips files outside the vault, and single-note archives with many attachments ask for confirmation like bulk operations do.
+
+### Changed
+
+- Shared attachments claimed by two notes in one batch stay ungrouped instead of sticking to the first note, and stored original paths no longer count as guessed locations in restore warnings.
+- Incoming-link scans are cached per batch operation, and the folder command checks for work without walking the whole subtree on every palette hover.
+
 ## 0.6.0 — 2026-11-02
 
 ### Added
