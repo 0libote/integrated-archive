@@ -2,12 +2,13 @@ export function addCollisionSuffix(path: string, number: number): string {
   if (number === 0) return path;
   const slash = path.lastIndexOf("/");
   const dot = path.lastIndexOf(".");
-  const hasExtension = dot > slash + 1;
+  const hasExtension = dot > slash + 1 && dot < path.length - 1;
   const split = hasExtension ? dot : path.length;
   return `${path.slice(0, split)} (${number})${path.slice(split)}`;
 }
 
 export function isPathInFolder(path: string, folder: string): boolean {
+  if (!folder || folder === "." || folder === "/") return false;
   return path === folder || path.startsWith(`${folder}/`);
 }
 

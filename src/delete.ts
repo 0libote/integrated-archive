@@ -20,14 +20,16 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
   manager: DeletionManager<AbstractFile>,
   options: DeletionInterceptorOptions<AbstractFile, File>,
 ): () => void {
-  const explicitDeletes = new Set<AbstractFile>();
-  const archives = new Map<File, Promise<boolean>>();
+  const keyOf = (file: AbstractFile): string => (file as { path: string }).path ?? String(file);
+  const explicitDeletes = new Set<string>();
+  const archives = new Map<string, Promise<boolean>>();
   const archiveOnce = (file: File): Promise<boolean> => {
-    const pending = archives.get(file);
+    const key = keyOf(file);
+    const pending = archives.get(key);
     if (pending) return pending;
     const operation = Promise.resolve().then(() => options.archive(file));
-    archives.set(file, operation);
-    void operation.then(() => archives.delete(file), () => archives.delete(file));
+    archives.set(key, operation);
+    void operation.then(() => archives.delete(key), () => archives.delete(key));
     return operation;
   };
 
@@ -36,11 +38,12 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       this: DeletionManager<AbstractFile>,
       file: AbstractFile,
     ): Promise<boolean> {
-      if (options.isFile(file) && archives.has(file)) {
+      const action = options.getAction();
+      if (options.isFile(file) && archives.has(keyOf(file))) {
         await archiveOnce(file);
         return false;
       }
-      if (!options.isFile(file) || options.isArchived(file) || options.getAction() === "delete") {
+      if (!options.isFile(file) || options.isArchived(file) || action === "delete") {
         return next.call(this, file);
       }
       // Archive mode: move to the archive and consume the delete so callers
@@ -48,13 +51,17 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       // the just-archived file. Callers that only await the prompt (ignoring
       // the result) still get the side effect. Returning false means "do not
       // proceed with deletion" in both flows.
-      if (options.getAction() === "archive") {
-        await archiveOnce(file);
-        return false;
+      if (action === "archive") {
+        // A failed archive must not make the vault undeletable: fall back to
+        // the normal delete flow so the user can still act.
+        if (await archiveOnce(file)) return false;
+        return next.call(this, file);
       }
 
       const choice = await options.choose(file);
       if (choice === "archive") {
+        // The user chose archive, not delete: stay put even when archiving
+        // fails (the failure is already shown as a Notice by archive()).
         await archiveOnce(file);
         return false;
       }
@@ -62,11 +69,12 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
         // Trash here and consume: two-step callers seeing `false` skip their
         // own trashFile (no double-trash), one-step callers ignoring the
         // result still get the deletion as a side effect.
-        explicitDeletes.add(file);
+        const key = keyOf(file);
+        explicitDeletes.add(key);
         try {
           await this.trashFile(file);
         } finally {
-          explicitDeletes.delete(file);
+          explicitDeletes.delete(key);
         }
         return false;
       }
@@ -76,8 +84,9 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       this: DeletionManager<AbstractFile>,
       file: AbstractFile,
     ): Promise<void> {
-      if (explicitDeletes.has(file)) return next.call(this, file);
-      if (options.isFile(file) && archives.has(file)) {
+      const action = options.getAction();
+      if (explicitDeletes.has(keyOf(file))) return next.call(this, file);
+      if (options.isFile(file) && archives.has(keyOf(file))) {
         await archiveOnce(file);
         return;
       }
@@ -86,12 +95,11 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       // redirect files to the archive instead of deleting them. Folders,
       // archived files, and other modes pass through untouched.
       if (
-        options.getAction() === "archive"
+        action === "archive"
         && options.isFile(file)
         && !options.isArchived(file)
       ) {
-        await archiveOnce(file);
-        return;
+        if (await archiveOnce(file)) return;
       }
       return next.call(this, file);
     },

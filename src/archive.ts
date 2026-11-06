@@ -91,6 +91,8 @@ export interface RestoreResult {
 
 export class ArchiveManager<File extends ArchiveFile> {
   private operationQueue: Promise<void> = Promise.resolve();
+  private groupCounter = 0;
+  private excludedCache: { raw: string; parsed: string[] } | null = null;
 
   constructor(
     private readonly host: ArchiveHost<File>,
@@ -108,8 +110,13 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   isExcludedPath(path: string): boolean {
-    return parseExcludedPaths(this.getSettings().excludedPaths)
-      .some((excluded) => isPathInFolder(path, excluded));
+    const raw = this.getSettings().excludedPaths;
+    let parsed = this.excludedCache?.raw === raw ? this.excludedCache.parsed : null;
+    if (!parsed) {
+      parsed = parseExcludedPaths(raw);
+      this.excludedCache = { parsed, raw };
+    }
+    return parsed.some((excluded) => isPathInFolder(path, excluded));
   }
 
   archive(file: File, options?: ArchiveOptions): Promise<ArchiveResult> {
@@ -139,6 +146,17 @@ export class ArchiveManager<File extends ArchiveFile> {
         const record = history[index];
         if (!record) continue;
         const file = this.host.getFile(record.archivedPath);
+        if (!file) continue;
+        // Never split a group: a grouped record restores with its group and
+        // only the primary result is returned to keep this signature.
+        if (record.groupId) {
+          const members = history.filter((item) => item.groupId === record.groupId);
+          for (const member of members) {
+            const memberFile = this.host.getFile(member.archivedPath);
+            if (memberFile) return (await this.restoreGroupFromRecord(memberFile, record.groupId)).primary;
+          }
+          continue;
+        }
         if (file) return this.restoreNow(file);
       }
       throw new Error("There is no archived file to restore.");
@@ -169,7 +187,8 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   makeGroupId(sourcePath: string): string {
-    return `${this.host.now()}:${sourcePath}`;
+    this.groupCounter += 1;
+    return `${this.host.now()}:${sourcePath}:${this.groupCounter}:${Math.random().toString(36).slice(2, 8)}`;
   }
 
   getRecordGroup(archivedPath: string): string | undefined {
@@ -183,7 +202,7 @@ export class ArchiveManager<File extends ArchiveFile> {
       .map((record) => record.archivedPath);
   }
 
-  async collectAttachments(file: File): Promise<AttachmentPlan<File>> {
+  async collectAttachments(file: File, incomingCache?: Map<string, string[]>): Promise<AttachmentPlan<File>> {
     const attachments: File[] = [];
     const sharedSkipped: string[] = [];
     const settings = this.getSettings();
@@ -206,7 +225,7 @@ export class ArchiveManager<File extends ArchiveFile> {
       if (candidate.extension === "md" || candidate.extension === "canvas") continue;
       if (this.isArchivedPath(candidate.path)) continue;
       if (this.isExcludedPath(candidate.path)) continue;
-      if (!settings.includeSharedAttachments && this.isSharedAttachment(candidate.path, file.path)) {
+      if (!settings.includeSharedAttachments && this.isSharedAttachment(candidate.path, file.path, incomingCache)) {
         sharedSkipped.push(candidate.path);
         continue;
       }
@@ -215,10 +234,16 @@ export class ArchiveManager<File extends ArchiveFile> {
     return { attachments, sharedSkipped };
   }
 
-  private isSharedAttachment(destination: string, sourcePath: string): boolean {
+  private isSharedAttachment(destination: string, sourcePath: string, incomingCache?: Map<string, string[]>): boolean {
     let referrers: string[];
     try {
-      referrers = this.host.listIncomingLinks(destination);
+      const cached = incomingCache?.get(destination);
+      if (cached) {
+        referrers = cached;
+      } else {
+        referrers = this.host.listIncomingLinks(destination);
+        incomingCache?.set(destination, referrers);
+      }
     } catch {
       // Without a link index we cannot prove exclusivity, so keep the file.
       return true;
@@ -240,6 +265,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
     if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
     if (this.isExcludedPath(file.path)) throw new Error(`${file.name} is in a protected location.`);
+    if (this.getHistory().some((record) => record.archivedPath === file.path)) {
+      throw new Error(`${file.name} is already archived.`);
+    }
 
     const originalPath = file.path;
     const created = file.stat.ctime;
@@ -247,6 +275,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     const archivedAt = this.host.now();
     const relativePath = this.getSettings().preserveFolders ? file.path : file.name;
     const wantedPath = this.host.normalizePath(`${archiveFolder}/${relativePath}`);
+    if (this.isExcludedPath(wantedPath)) {
+      throw new Error(`Cannot archive ${file.name}: the archive folder is inside a protected location.`);
+    }
     await this.ensureFolder(wantedPath.slice(0, wantedPath.lastIndexOf("/")));
     const destination = this.uniquePath(wantedPath);
     if (this.isExcludedPath(destination)) {
@@ -314,19 +345,31 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   private async restoreGroupFromRecord(file: File, groupId: string): Promise<RestoreGroupResult> {
-    const primary = await this.restoreNow(file);
-    const attachments: RestoreResult[] = [];
+    // Try the requested file first, then every fellow member. The first file
+    // that restores becomes the primary so one blocked file cannot strand
+    // the rest of its group.
+    const queued = [file.path, ...this.getHistory()
+      .filter((record) => record.groupId === groupId)
+      .map((record) => record.archivedPath)];
+    const seen = new Set<string>();
+    const succeeded: RestoreResult[] = [];
     const failures: AttachmentFailure[] = [];
-    // Read history fresh: restoreNow removed the primary record above.
-    const members = this.getHistory().filter((record) => record.groupId === groupId);
-    for (const member of members) {
-      const memberFile = this.host.getFile(member.archivedPath);
+    for (const archivedPath of queued) {
+      if (seen.has(archivedPath)) continue;
+      seen.add(archivedPath);
+      const memberFile = this.host.getFile(archivedPath);
       if (!memberFile) continue;
       try {
-        attachments.push(await this.restoreNow(memberFile));
+        succeeded.push(await this.restoreNow(memberFile));
       } catch (error) {
-        failures.push({ error, originalPath: member.archivedPath });
+        failures.push({ error, originalPath: archivedPath });
       }
+    }
+    const [primary, ...attachments] = succeeded;
+    if (!primary) {
+      const first = failures[0]?.error;
+      if (first instanceof Error) throw first;
+      throw new Error("There is no archived file to restore.");
     }
     return { attachments, failures, groupId, primary };
   }
@@ -370,7 +413,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     const history = this.getHistory();
     const recordIndex = this.findHistoryIndex(file.path, history);
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
-    const { inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
+    const { fromStoredPath, inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
 
     if (this.isExcludedPath(originalPath)) {
       throw new Error(`Cannot restore ${file.name}: ${originalPath} is in a protected location.`);
@@ -392,18 +435,28 @@ export class ArchiveManager<File extends ArchiveFile> {
       }
     }
 
-    return { destination, historyError, inferredOriginalPath: !record, metadataError };
+    return { destination, historyError, inferredOriginalPath: !record && !fromStoredPath, metadataError };
   }
 
   private async resolveRestorePath(
     file: File,
     record: ArchiveRecord | undefined,
-  ): Promise<{ inferredProperty?: string; originalPath: string }> {
-    if (record?.originalPath) return { originalPath: record.originalPath };
+  ): Promise<{ fromStoredPath?: boolean; inferredProperty?: string; originalPath: string }> {
+    // Saved history is trusted for metadata but not blindly for the path: it
+    // may predate an archive-folder change or come from synced data. Reuse
+    // the same strict check as stored frontmatter paths, except a path that
+    // became protected must still surface (restoreNow throws) instead of
+    // silently redirecting elsewhere.
+    if (record?.originalPath) {
+      if (this.isExcludedPath(record.originalPath)) return { originalPath: record.originalPath };
+      if (this.isValidOriginalPath(record.originalPath)) return { originalPath: record.originalPath };
+    }
 
     const property = this.getSettings().originalPathProperty.trim();
     const stored = property ? await this.readOriginalPathProperty(file, property) : undefined;
-    if (stored && this.isValidOriginalPath(stored)) return { inferredProperty: property, originalPath: stored };
+    if (stored && this.isValidOriginalPath(stored)) {
+      return { fromStoredPath: true, inferredProperty: property, originalPath: stored };
+    }
 
     return { originalPath: this.inferOriginalPath(file) };
   }
@@ -549,7 +602,7 @@ export class ArchiveManager<File extends ArchiveFile> {
   private readTags(value: unknown): string[] {
     let raw: string[];
     if (Array.isArray(value)) {
-      raw = value.map(String);
+      raw = value.map((tag) => String(tag).trim());
     } else if (typeof value === "string") {
       raw = value.split(/[ ,]+/).filter(Boolean);
     } else {
@@ -557,7 +610,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     }
     // Strip leading "#" markers so stored tags stay consistent ("#foo" and
     // "foo" are the same tag). Invalid leftovers are dropped.
-    return raw.map((tag) => tag.replace(/^#+/, "")).filter(Boolean);
+    return raw.map((tag) => tag.replace(/^#+/, "").trim()).filter(Boolean);
   }
 
   private setHistoricalDate(
@@ -640,7 +693,27 @@ export class ArchiveManager<File extends ArchiveFile> {
   private async addHistory(record: ArchiveRecord): Promise<void> {
     const records = this.getHistory().filter((item) => item.archivedPath !== record.archivedPath);
     records.push(record);
-    await this.host.saveArchiveHistory(records.slice(-MAX_ARCHIVE_HISTORY));
+    if (records.length <= MAX_ARCHIVE_HISTORY) {
+      await this.host.saveArchiveHistory(records);
+      return;
+    }
+    // Over the cap: evict records for files that no longer exist first so
+    // live restores keep their way home as long as possible.
+    const missing: number[] = [];
+    records.forEach((item, index) => {
+      if (!this.host.getFile(item.archivedPath)) missing.push(index);
+    });
+    let trimmed = [...records];
+    // Remove oldest missing-file records until we fit.
+    for (let i = missing.length - 1; i >= 0 && trimmed.length > MAX_ARCHIVE_HISTORY; i--) {
+      const at = missing[i];
+      if (at !== undefined) trimmed = [...trimmed.slice(0, at), ...trimmed.slice(at + 1)];
+    }
+    if (trimmed.length > MAX_ARCHIVE_HISTORY) {
+      console.warn(`Integrated Archive: history over ${MAX_ARCHIVE_HISTORY} records; oldest entry dropped.`);
+      trimmed = trimmed.slice(-MAX_ARCHIVE_HISTORY);
+    }
+    await this.host.saveArchiveHistory(trimmed);
   }
 
   private inferOriginalPath(file: File): string {
