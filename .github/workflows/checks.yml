@@ -43,7 +43,7 @@ jobs:
       - run: bun install --frozen-lockfile --ignore-scripts
       # Enforces bunfig.toml coverageThreshold (lines + functions).
       - run: bun run test:coverage
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-lcov
