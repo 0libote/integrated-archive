@@ -241,6 +241,30 @@ test("archives unrelated concurrent deletes and coalesces duplicate requests", a
   uninstall();
 });
 
+test("tracks pending archives by file identity across renames", async () => {
+  const fixture = makeFixture();
+  fixture.setAction("archive");
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  fixture.options.archive = async (file) => {
+    fixture.calls.push(`archive:${file.path}`);
+    await pending;
+    return true;
+  };
+  const uninstall = installDeletionInterceptor(fixture.manager, fixture.options);
+  const file = new File("Projects/note.md");
+  const first = fixture.manager.trashFile(file);
+  await Promise.resolve();
+  // A sync renames the file while the archive is in flight. The follow-up
+  // trash must join the pending operation, not start a second archive.
+  (file as { path: string }).path = "Projects/renamed.md";
+  const second = fixture.manager.trashFile(file);
+  release();
+  await Promise.all([first, second]);
+  expect(fixture.calls).toEqual(["archive:Projects/note.md"]);
+  uninstall();
+});
+
 test("consumes duplicate deletes after the pending archive has moved the file", async () => {
   const fixture = makeFixture();
   fixture.setAction("archive");

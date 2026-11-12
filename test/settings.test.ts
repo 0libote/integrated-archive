@@ -225,6 +225,13 @@ test("rejects protected paths overlapping the archive folder", () => {
   expect(validateExcludedOverlap(".", "Archive")).toBe(undefined);
 });
 
+test("keeps protected paths and resets an overlapping archive folder", () => {
+  // A bad sync must never silently unprotect user data: protection wins.
+  const settings = sanitizeSettings({ archiveFolder: "Private/Archive", excludedPaths: "Private" });
+  expect(settings.excludedPaths).toBe("Private");
+  expect(settings.archiveFolder).toBe("Archive");
+});
+
 test("loads and normalizes protected paths from stored settings", () => {
   const settings = sanitizeSettings({ excludedPaths: " Private \r\n\r\n Templates " });
 

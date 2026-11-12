@@ -761,7 +761,7 @@ test("leaves shared attachments in place when archiving", async () => {
   expect(note.path).toBe("Archive/note.md");
   expect(image.path).toBe("Assets/image.png");
   expect(plugin.settings.archiveHistory).toHaveLength(1);
-  expect(notices.some((message) => message.includes("shared attachment"))).toBe(true);
+  expect(notices.some((message) => message.includes("attachment") && message.includes("left in place"))).toBe(true);
 });
 
 test("expands batch archives with attachments", async () => {
@@ -853,7 +853,7 @@ test("batch leaves shared attachments in place and counts each once", async () =
   await plugin.onload();
   await (plugin as unknown as { archiveMany(files: MockFile[]): Promise<void> }).archiveMany([first, second]);
   expect(image.path).toBe("image.png");
-  expect(notices).toContain("Archived 2 files. 1 shared attachment left in place.");
+  expect(notices).toContain("Archived 2 files. 1 attachment left in place (shared or link index not ready).");
 });
 
 test("missing link caches conservatively leave attachments in place", async () => {

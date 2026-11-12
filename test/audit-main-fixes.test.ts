@@ -304,6 +304,28 @@ test("shared attachment claimed by two notes in one batch stays ungrouped", asyn
   expect(expanded.groups.get(first.path)).not.toBe(expanded.groups.get(second.path));
 });
 
+test("explicitly selected shared attachment stays ungrouped", async () => {
+  const fixture = makeApp();
+  fixture.app.loadedData = { archiveAttachments: true, includeSharedAttachments: true };
+  const first = new MockFile("first.md");
+  const second = new MockFile("second.md");
+  const image = new MockFile("image.png");
+  for (const file of [first, second, image]) fixture.entries.set(file.path, file);
+  fixture.app.metadataCache.resolvedLinks = {
+    [first.path]: { [image.path]: 1 },
+    [second.path]: { [image.path]: 1 },
+  };
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const expanded = await (plugin as unknown as {
+    expandWithAttachments(files: MockFile[]): Promise<{ groups: Map<string, string>; items: MockFile[] }>;
+  }).expandWithAttachments([first, second, image]);
+  // The image was explicitly selected so it is still archived, but it must
+  // not belong to either note's group.
+  expect(expanded.items.map((file) => file.path)).toContain(image.path);
+  expect(expanded.groups.get(image.path)).toBe(undefined);
+});
+
 test("single note with many attachments asks for confirmation", async () => {
   const fixture = makeApp();
   fixture.app.loadedData = { archiveAttachments: true, includeSharedAttachments: true };

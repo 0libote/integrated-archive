@@ -16,20 +16,31 @@ export interface DeletionInterceptorOptions<AbstractFile, File extends AbstractF
   isFile(file: AbstractFile): file is File;
 }
 
-export function installDeletionInterceptor<AbstractFile, File extends AbstractFile>(
+export function installDeletionInterceptor<AbstractFile extends object, File extends AbstractFile>(
   manager: DeletionManager<AbstractFile>,
   options: DeletionInterceptorOptions<AbstractFile, File>,
 ): () => void {
-  const keyOf = (file: AbstractFile): string => (file as { path: string }).path ?? String(file);
-  const explicitDeletes = new Set<string>();
-  const archives = new Map<string, Promise<boolean>>();
+  // Pending archives are keyed by file identity so a sync rename between the
+  // prompt and the trash call still finds the in-flight operation. A secondary
+  // path index coalesces duplicate requests arriving as distinct instances of
+  // the same path. Both indexes only hold in-flight operations.
+  const explicitDeletes = new WeakSet<AbstractFile>();
+  const archives = new Map<AbstractFile, Promise<boolean>>();
+  const archivesByPath = new Map<string, Promise<boolean>>();
+  const pathOf = (file: AbstractFile): string => (file as { path?: string }).path ?? "";
+  const findPending = (file: File): Promise<boolean> | undefined =>
+    archives.get(file) ?? archivesByPath.get(pathOf(file));
   const archiveOnce = (file: File): Promise<boolean> => {
-    const key = keyOf(file);
-    const pending = archives.get(key);
+    const pending = findPending(file);
     if (pending) return pending;
     const operation = Promise.resolve().then(() => options.archive(file));
-    archives.set(key, operation);
-    void operation.then(() => archives.delete(key), () => archives.delete(key));
+    archives.set(file, operation);
+    archivesByPath.set(pathOf(file), operation);
+    const cleanup = (): void => {
+      if (archives.get(file) === operation) archives.delete(file);
+      if (archivesByPath.get(pathOf(file)) === operation) archivesByPath.delete(pathOf(file));
+    };
+    void operation.then(cleanup, cleanup);
     return operation;
   };
 
@@ -39,7 +50,7 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       file: AbstractFile,
     ): Promise<boolean> {
       const action = options.getAction();
-      if (options.isFile(file) && archives.has(keyOf(file))) {
+      if (options.isFile(file) && findPending(file)) {
         await archiveOnce(file);
         return false;
       }
@@ -69,12 +80,11 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
         // Trash here and consume: two-step callers seeing `false` skip their
         // own trashFile (no double-trash), one-step callers ignoring the
         // result still get the deletion as a side effect.
-        const key = keyOf(file);
-        explicitDeletes.add(key);
+        explicitDeletes.add(file);
         try {
           await this.trashFile(file);
         } finally {
-          explicitDeletes.delete(key);
+          explicitDeletes.delete(file);
         }
         return false;
       }
@@ -85,8 +95,8 @@ export function installDeletionInterceptor<AbstractFile, File extends AbstractFi
       file: AbstractFile,
     ): Promise<void> {
       const action = options.getAction();
-      if (explicitDeletes.has(keyOf(file))) return next.call(this, file);
-      if (options.isFile(file) && archives.has(keyOf(file))) {
+      if (explicitDeletes.has(file)) return next.call(this, file);
+      if (options.isFile(file) && findPending(file)) {
         await archiveOnce(file);
         return;
       }

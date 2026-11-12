@@ -137,14 +137,18 @@ function repairSettings(settings: ArchiveSettings): void {
   }
   if (validateDateFormat(settings.dateFormat)) settings.dateFormat = DEFAULT_SETTINGS.dateFormat;
   // Self-heal overlapping protected paths on load: the settings UI blocks new
-  // overlaps, but synced data.json may predate the check. Drop only the
-  // overlapping lines so a bad sync cannot make every archive throw.
-  const folder = normalizeExcludedSegment(settings.archiveFolder);
-  if (folder && folder !== ".") {
-    const kept = parseExcludedPaths(settings.excludedPaths).filter((excluded) =>
-      excluded !== folder && !isPathInFolder(excluded, folder) && !isPathInFolder(folder, excluded));
-    if (kept.length !== parseExcludedPaths(settings.excludedPaths).length) {
-      settings.excludedPaths = kept.join("\n");
+  // overlaps, but synced data.json may predate the check. Protection wins over
+  // location, so a bad sync moves the archive folder back instead of silently
+  // unprotecting user data. Only when even the default folder overlaps do the
+  // overlapping lines get dropped so archiving can run at all.
+  if (overlapsArchiveFolder(settings.archiveFolder, settings.excludedPaths)) {
+    settings.archiveFolder = DEFAULT_SETTINGS.archiveFolder;
+    if (overlapsArchiveFolder(settings.archiveFolder, settings.excludedPaths)) {
+      const folder = normalizeExcludedSegment(settings.archiveFolder);
+      settings.excludedPaths = parseExcludedPaths(settings.excludedPaths)
+        .filter((excluded) =>
+          excluded !== folder && !isPathInFolder(excluded, folder) && !isPathInFolder(folder, excluded))
+        .join("\n");
     }
   }
   repairPropertyCollisions(settings);
@@ -255,6 +259,13 @@ export function validateExcludedPaths(value: string): string | undefined {
     }
   }
   return undefined;
+}
+
+function overlapsArchiveFolder(archiveFolder: string, value: string): boolean {
+  const folder = normalizeExcludedSegment(archiveFolder);
+  if (!folder || folder === ".") return false;
+  return parseExcludedPaths(value).some((excluded) =>
+    excluded === folder || isPathInFolder(excluded, folder) || isPathInFolder(folder, excluded));
 }
 
 export function validateExcludedOverlap(archiveFolder: string, value: string): string | undefined {

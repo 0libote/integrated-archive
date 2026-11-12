@@ -265,9 +265,9 @@ export class ArchiveManager<File extends ArchiveFile> {
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
     if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
     if (this.isExcludedPath(file.path)) throw new Error(`${file.name} is in a protected location.`);
-    if (this.getHistory().some((record) => record.archivedPath === file.path)) {
-      throw new Error(`${file.name} is already archived.`);
-    }
+    // No history-equality check here on purpose: a live file reusing a stale
+    // archived path (e.g. after the archive folder changed) must stay
+    // archivable. Files that truly are archived are caught above.
 
     const originalPath = file.path;
     const created = file.stat.ctime;
@@ -697,18 +697,17 @@ export class ArchiveManager<File extends ArchiveFile> {
       await this.host.saveArchiveHistory(records);
       return;
     }
-    // Over the cap: evict records for files that no longer exist first so
-    // live restores keep their way home as long as possible.
-    const missing: number[] = [];
-    records.forEach((item, index) => {
-      if (!this.host.getFile(item.archivedPath)) missing.push(index);
+    // Over the cap: evict records for files that no longer exist first,
+    // oldest first, so live restores keep their way home as long as possible.
+    let over = records.length - MAX_ARCHIVE_HISTORY;
+    let trimmed = records.filter((item) => {
+      if (over <= 0) return true;
+      if (!this.host.getFile(item.archivedPath)) {
+        over -= 1;
+        return false;
+      }
+      return true;
     });
-    let trimmed = [...records];
-    // Remove oldest missing-file records until we fit.
-    for (let i = missing.length - 1; i >= 0 && trimmed.length > MAX_ARCHIVE_HISTORY; i--) {
-      const at = missing[i];
-      if (at !== undefined) trimmed = [...trimmed.slice(0, at), ...trimmed.slice(at + 1)];
-    }
     if (trimmed.length > MAX_ARCHIVE_HISTORY) {
       console.warn(`Integrated Archive: history over ${MAX_ARCHIVE_HISTORY} records; oldest entry dropped.`);
       trimmed = trimmed.slice(-MAX_ARCHIVE_HISTORY);

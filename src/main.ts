@@ -381,7 +381,7 @@ export default class IntegratedArchivePlugin extends Plugin {
     const warnings = result.succeeded.filter(({ result: item }) => item.metadataError || item.historyError).length;
     let message = this.batchNotice("Archived", result.succeeded.length, result.failed.length, warnings);
     if (expanded.sharedSkipped > 0) {
-      message += ` ${expanded.sharedSkipped} shared ${expanded.sharedSkipped === 1 ? "attachment" : "attachments"} left in place.`;
+      message += ` ${expanded.sharedSkipped} ${expanded.sharedSkipped === 1 ? "attachment" : "attachments"} left in place (shared or link index not ready).`;
     }
     new Notice(message);
   }
@@ -396,7 +396,6 @@ export default class IntegratedArchivePlugin extends Plugin {
     const items = [...files];
     const groups = new Map<string, string>();
     const seen = new Set(files.map((file) => file.path));
-    const originallySelected = new Set(seen);
     const sharedSkipped = new Set<string>();
     const incomingCache = new Map<string, string[]>();
     for (const file of files) {
@@ -412,7 +411,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       groups.set(file.path, groupId);
       for (const attachment of plan.attachments) {
         const existing = groups.get(attachment.path);
-        if (existing && existing !== groupId && !originallySelected.has(attachment.path)) {
+        if (existing && existing !== groupId) {
           // Claimed by two different notes in this batch: leave it ungrouped
           // so no single note implies ownership of a shared file.
           groups.delete(attachment.path);
@@ -573,7 +572,8 @@ export default class IntegratedArchivePlugin extends Plugin {
     const walk = (current: TFolder): void => {
       for (const child of current.children) {
         if (child instanceof TFolder) {
-          walk(child);
+          // Mirror hasArchivableFiles: never descend into archived subtrees.
+          if (!this.archiveManager.isArchivedPath(child.path)) walk(child);
         } else if (this.isVaultFile(child)) {
           if (!this.isArchived(child) && !this.archiveManager.isExcludedPath(child.path)) files.push(child);
         }
@@ -604,7 +604,7 @@ export default class IntegratedArchivePlugin extends Plugin {
       extras.push(`+ ${result.attachments.length} ${result.attachments.length === 1 ? "attachment" : "attachments"}`);
     }
     if (result.sharedSkipped.length) {
-      extras.push(`${result.sharedSkipped.length} shared ${result.sharedSkipped.length === 1 ? "attachment" : "attachments"} left in place`);
+      extras.push(`${result.sharedSkipped.length} ${result.sharedSkipped.length === 1 ? "attachment" : "attachments"} left in place (shared or link index not ready)`);
     }
     if (result.failures.length) {
       extras.push(`${result.failures.length} ${result.failures.length === 1 ? "attachment" : "attachments"} failed`);
