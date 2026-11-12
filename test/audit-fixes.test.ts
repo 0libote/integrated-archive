@@ -125,13 +125,39 @@ test("group restore continues when the first file is blocked", async () => {
   expect(result.failures.length).toBe(1);
 });
 
-test("archiving an already-recorded path is rejected", async () => {
+test("archiving a live file at a stale recorded path succeeds", async () => {
+  // The archive folder moved on, leaving a stale record behind. A new file
+  // reusing that path is not archived: it must stay archivable.
   const fixture = makeFixture({ archiveFolder: "New Archive" });
   const file = makeFile("Old Archive/note.md");
   fixture.setHistory([{ archivedAt: 100, archivedPath: file.path, originalPath: "note.md" }]);
   fixture.entries.set(file.path, "file");
   fixture.files.set(file.path, file);
-  await expect(fixture.manager.archive(file)).rejects.toThrow(/already archived/);
+  await fixture.manager.archive(file);
+  expect(file.path).toBe("New Archive/note.md");
+  expect(fixture.getHistory().length).toBe(2);
+});
+
+test("history eviction drops the oldest missing-file records first", async () => {
+  const fixture = makeFixture();
+  const kept: ArchiveRecord[] = [];
+  for (let i = 0; i < 200; i++) {
+    const path = `Archive/old${i}.md`;
+    kept.push({ archivedAt: i, archivedPath: path, originalPath: `old${i}.md` });
+    if (i >= 2) {
+      const file = makeFile(path);
+      fixture.entries.set(path, "file");
+      fixture.files.set(path, file);
+    }
+  }
+  // old0 and old1 are both gone; only one slot needs freeing.
+  fixture.setHistory(kept);
+  await fixture.manager.archive(makeFile("Projects/new.md"));
+  const history = fixture.getHistory();
+  expect(history.length).toBe(200);
+  expect(history.some((record) => record.archivedPath === "Archive/old0.md")).toBe(false);
+  expect(history.some((record) => record.archivedPath === "Archive/old1.md")).toBe(true);
+  expect(history.some((record) => record.archivedPath === "Archive/new.md")).toBe(true);
 });
 
 test("group ids are unique across rapid calls", () => {
