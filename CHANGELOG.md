@@ -2,6 +2,12 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.6.2 — 2026-11-22
+
+### Changed
+
+- Updated dev dependencies: `eslint` (10.15.0) and `eslint-plugin-obsidianmd` (0.6.0).
+
 ## 0.6.1 — 2026-11-06
 
 ### Fixed
