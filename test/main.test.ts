@@ -59,6 +59,7 @@ class MockPlugin {
   app: TestApp;
   cleanups: Cleanup[] = [];
   commands: MockCommand[] = [];
+  ribbonIcons: Array<{ callback: () => void; icon: string; title: string }> = [];
   settingTabs: unknown[] = [];
 
   constructor(app: TestApp) {
@@ -76,6 +77,11 @@ class MockPlugin {
 
   async loadData() {
     return this.app.loadedData;
+  }
+
+  addRibbonIcon(icon: string, title: string, callback: () => void) {
+    this.ribbonIcons.push({ callback, icon, title });
+    return { remove: () => undefined };
   }
 
   register(cleanup: Cleanup) {
@@ -141,9 +147,27 @@ class MockButton {
   setDestructive() { return this; }
 }
 
+class MockFuzzySuggestModal {
+  constructor(public app: TestApp) {}
+  open() {
+    // Choices ride on the app object, which always comes from the test
+    // driving the plugin, no matter which suite's mock class is active.
+    const queue = (this.app as unknown as { fuzzyChoices?: Array<string | undefined> }).fuzzyChoices;
+    const choice = queue?.shift();
+    if (choice === undefined) {
+      (this as unknown as { onClose?: () => void }).onClose?.();
+    } else {
+      (this as unknown as { onChooseItem(item: string): void }).onChooseItem(choice);
+    }
+  }
+  close() {}
+  onClose() {}
+}
+
 mock.module("obsidian", () => ({
   App: class {},
   Modal: MockModal,
+  FuzzySuggestModal: MockFuzzySuggestModal,
   Notice: class {
     constructor(message: string) {
       notices.push(message);
@@ -164,6 +188,7 @@ mock.module("obsidian", () => ({
 const { default: IntegratedArchivePlugin, BULK_CONFIRM_THRESHOLD, isExternalFile, needsBulkConfirm } = await import("../src/main.ts");
 
 interface TestApp {
+  fuzzyChoices: Array<string | undefined>;
   fileManager: {
     processFrontMatter(file: MockFile, update: (frontmatter: Record<string, unknown>) => void): Promise<void>;
     promptForDeletion(file: MockAbstractFile): Promise<boolean>;
@@ -200,6 +225,7 @@ function makeApp() {
   let layoutReady = true;
   const layoutReadyCallbacks: Array<() => void> = [];
   const app: TestApp = {
+    fuzzyChoices: [],
     loadedData: null,
     savedData: null,
     metadataCache: {
@@ -309,6 +335,7 @@ test("loads sanitized settings and registers commands and menus", async () => {
     "restore-current-file",
     "undo-last-archive",
     "archive-current-folder",
+    "archive-stale-files",
   ]);
   expect(fixture.events.has("workspace:file-menu")).toBe(true);
   expect(fixture.events.has("workspace:files-menu")).toBe(true);
@@ -390,7 +417,7 @@ test("adds the correct single-file and multi-file menu actions", async () => {
   const fileMenu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(singleTitles)) };
   fixture.events.get("workspace:file-menu")?.(fileMenu, active);
   fixture.events.get("workspace:file-menu")?.(fileMenu, archived);
-  expect(singleTitles).toEqual(["Archive", "Restore from archive"]);
+  expect(singleTitles).toEqual(["Archive", "Restore from archive", "Restore to…"]);
 
   const multiTitles: string[] = [];
   const filesMenu = { addItem: (callback: (item: MenuItem) => void) => callback(new MenuItem(multiTitles)) };
@@ -870,4 +897,93 @@ test("missing link caches conservatively leave attachments in place", async () =
   await plugin.onload();
   expect(await plugin.archive(note as never)).toBe(true);
   expect(image.path).toBe("image.png");
+});
+
+test("adds a ribbon icon by default and skips it when disabled", async () => {
+  const enabled = makeApp();
+  plugin = new IntegratedArchivePlugin(enabled.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect((plugin as unknown as MockPlugin).ribbonIcons.map((entry) => entry.icon)).toEqual(["archive"]);
+
+  const disabled = makeApp();
+  disabled.app.loadedData = { showRibbonIcon: false };
+  plugin = new IntegratedArchivePlugin(disabled.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect((plugin as unknown as MockPlugin).ribbonIcons).toEqual([]);
+});
+
+test("stale archiving stays hidden until explicitly enabled", async () => {
+  const fixture = makeApp();
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  const command = (plugin as unknown as MockPlugin).commands.find((entry) => entry.id === "archive-stale-files");
+  const check = command as unknown as { checkCallback(checking: boolean): boolean };
+  expect(check.checkCallback(true)).toBe(false);
+});
+
+test("archives stale files after confirmation", async () => {
+  const fixture = makeApp();
+  const old = new MockFile("Projects/old.md");
+  fixture.entries.set(old.path, old);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  plugin.settings.staleArchiving = true;
+
+  const command = (plugin as unknown as MockPlugin).commands.find((entry) => entry.id === "archive-stale-files");
+  const check = command as unknown as { checkCallback(checking: boolean): boolean };
+  expect(check.checkCallback(true)).toBe(true);
+  check.checkCallback(false);
+  await Bun.sleep(10);
+  expect(modalButtons.map((button) => button.text)).toEqual(["Cancel", "Continue"]);
+  clickModalButton("Continue");
+  await Bun.sleep(10);
+  expect(old.path).toBe("Archive/old.md");
+  expect(plugin.settings.archiveHistory.map((record) => record.archivedPath)).toEqual(["Archive/old.md"]);
+  expect(notices.some((notice) => notice.startsWith("Archived 1 file"))).toBe(true);
+});
+
+test("reports when nothing is stale", async () => {
+  const fixture = makeApp();
+  const fresh = new MockFile("Projects/fresh.md");
+  fresh.stat.mtime = Date.now();
+  fixture.entries.set(fresh.path, fresh);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  plugin.settings.staleArchiving = true;
+
+  const command = (plugin as unknown as MockPlugin).commands.find((entry) => entry.id === "archive-stale-files");
+  const check = command as unknown as { checkCallback(checking: boolean): boolean };
+  check.checkCallback(false);
+  await Bun.sleep(10);
+  expect(notices).toContain("No stale files to archive.");
+  expect(fresh.path).toBe("Projects/fresh.md");
+});
+
+test("restores to the picked folder", async () => {
+  const fixture = makeApp();
+  const file = new MockFile("Projects/note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect(await plugin.archive(file as never)).toBe(true);
+  expect(file.path).toBe("Archive/note.md");
+
+  fixture.app.fuzzyChoices.push("Target");
+  expect(await plugin.restoreTo(file as never)).toBe(true);
+  expect(file.path).toBe("Target/note.md");
+  expect(plugin.settings.archiveHistory).toEqual([]);
+  expect(notices).toContain("Restored to Target/note.md");
+});
+
+test("restore to cancels without a choice", async () => {
+  const fixture = makeApp();
+  const file = new MockFile("Projects/note.md");
+  fixture.setActive(file);
+  plugin = new IntegratedArchivePlugin(fixture.app as unknown as App, {} as PluginManifest);
+  await plugin.onload();
+  expect(await plugin.archive(file as never)).toBe(true);
+
+  // No queued choice: the picker closes without choosing.
+  expect(await plugin.restoreTo(file as never)).toBe(false);
+  expect(file.path).toBe("Archive/note.md");
 });

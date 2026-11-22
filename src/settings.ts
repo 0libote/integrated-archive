@@ -24,8 +24,14 @@ export interface ArchiveRecord {
   originalPath: string;
 }
 
+export interface FolderDestination {
+  destination: string;
+  source: string;
+}
+
 export interface ArchiveSettings {
   archiveFolder: string;
+  folderDestinations: string;
   preserveFolders: boolean;
   cleanEmptyFolders: boolean;
   archiveAttachments: boolean;
@@ -45,6 +51,10 @@ export interface ArchiveSettings {
   storeOriginalPath: boolean;
   originalPathProperty: string;
   excludedPaths: string;
+  showRibbonIcon: boolean;
+  staleArchiving: boolean;
+  staleDays: number;
+  staleFolders: string;
 }
 
 export interface ArchiveData extends ArchiveSettings {
@@ -53,6 +63,7 @@ export interface ArchiveData extends ArchiveSettings {
 
 export const DEFAULT_SETTINGS: ArchiveSettings = {
   archiveFolder: "Archive",
+  folderDestinations: "",
   preserveFolders: false,
   cleanEmptyFolders: false,
   archiveAttachments: false,
@@ -72,6 +83,10 @@ export const DEFAULT_SETTINGS: ArchiveSettings = {
   storeOriginalPath: false,
   originalPathProperty: "archive-original-path",
   excludedPaths: "",
+  showRibbonIcon: true,
+  staleArchiving: false,
+  staleDays: 90,
+  staleFolders: "",
 };
 
 export const DEFAULT_DATA: ArchiveData = {
@@ -85,15 +100,18 @@ const BOOLEAN_KEYS = [
   "archiveAttachments",
   "includeSharedAttachments",
   "showArchiveMenu",
+  "showRibbonIcon",
   "addTag",
   "addArchivedDate",
   "addCreatedDate",
   "addModifiedDate",
   "storeOriginalPath",
+  "staleArchiving",
 ] as const;
 
 const STRING_KEYS = [
   "archiveFolder",
+  "folderDestinations",
   "tag",
   "archivedProperty",
   "createdProperty",
@@ -101,6 +119,7 @@ const STRING_KEYS = [
   "dateFormat",
   "originalPathProperty",
   "excludedPaths",
+  "staleFolders",
 ] as const;
 
 const PROPERTY_NAME_KEYS = ["archivedProperty", "createdProperty", "modifiedProperty", "originalPathProperty"] as const;
@@ -121,8 +140,16 @@ export function sanitizeSettings(value: unknown): ArchiveSettings {
     typeof stored.promptOnDelete === "boolean" ? stored.promptOnDelete : undefined,
   );
   settings.existingDateAction = stored.existingDateAction === "overwrite" ? "overwrite" : "preserve";
+  // A day count of zero or garbage would archive everything on the next scan,
+  // so only a positive whole number is accepted; anything else stays default.
+  const staleDays = stored.staleDays;
+  settings.staleDays = typeof staleDays === "number" && Number.isInteger(staleDays) && staleDays >= 1
+    ? staleDays
+    : DEFAULT_SETTINGS.staleDays;
   settings.archiveFolder = normalizeExcludedSegment(settings.archiveFolder);
   settings.excludedPaths = sanitizeExcludedPaths(settings.excludedPaths);
+  settings.staleFolders = sanitizeExcludedPaths(settings.staleFolders);
+  settings.folderDestinations = canonicalizeFolderDestinations(settings.folderDestinations);
 
   repairSettings(settings);
 
@@ -151,6 +178,10 @@ function repairSettings(settings: ArchiveSettings): void {
         .join("\n");
     }
   }
+  // Protection wins over routing too: a destination that overlaps a protected
+  // path could never receive archives, so the rule is dropped instead of
+  // failing every archive from that source.
+  settings.folderDestinations = sanitizeFolderDestinations(settings.folderDestinations, settings.excludedPaths);
   repairPropertyCollisions(settings);
 }
 
@@ -230,11 +261,15 @@ function normalizeExcludedSegment(value: string): string {
   return stripSlashes(value.trim()).replace(/\/{2,}/g, "/");
 }
 
-export function parseExcludedPaths(value: string): string[] {
+export function parsePathList(value: string): string[] {
   return value
     .split("\n")
     .map((line) => normalizeExcludedSegment(line))
     .filter(Boolean);
+}
+
+export function parseExcludedPaths(value: string): string[] {
+  return parsePathList(value);
 }
 
 function stripSlashes(value: string): string {
@@ -278,6 +313,67 @@ export function validateExcludedOverlap(archiveFolder: string, value: string): s
     if (protectedInsideArchive || archiveInsideProtected) {
       return "Protected paths overlap the archive folder.";
     }
+  }
+  return undefined;
+}
+
+export function parseFolderDestinations(value: string): FolderDestination[] {
+  const rules: FolderDestination[] = [];
+  for (const line of value.split("\n")) {
+    const separator = line.indexOf("=>");
+    if (separator < 0) continue;
+    const source = normalizeExcludedSegment(line.slice(0, separator));
+    const destination = normalizeExcludedSegment(line.slice(separator + 2));
+    if (!source || !destination || line.includes("\\")) continue;
+    if (hasDotSegment(source) || hasDotSegment(destination)) continue;
+    rules.push({ destination, source });
+  }
+  return rules;
+}
+
+function hasDotSegment(path: string): boolean {
+  return path.split("/").some((part) => part === "." || part === "..");
+}
+
+function canonicalizeFolderDestinations(value: string): string {
+  return parseFolderDestinations(value)
+    .map((rule) => `${rule.source} => ${rule.destination}`)
+    .join("\n");
+}
+
+export function sanitizeFolderDestinations(value: string, excludedPaths: string): string {
+  return parseFolderDestinations(value)
+    .filter((rule) => !validateArchiveFolder(rule.destination) && !validateExcludedOverlap(rule.destination, excludedPaths))
+    .map((rule) => `${rule.source} => ${rule.destination}`)
+    .join("\n");
+}
+
+export function validateFolderDestinations(value: string, settings: ArchiveSettings): string | undefined {
+  for (const line of value.split("\n")) {
+    if (!line.trim()) continue;
+    const separator = line.indexOf("=>");
+    if (separator < 0) return "Use one Source => Destination rule per line.";
+    const source = line.slice(0, separator).trim();
+    const destination = line.slice(separator + 2).trim();
+    if (!source || !destination) return "Use one Source => Destination rule per line.";
+    if (line.includes("\\")) return "Use forward slashes.";
+    if (source.split("/").some((part) => !part || part === "." || part === "..")) {
+      return "Use source paths without empty, . or .. segments.";
+    }
+    const invalidDestination = validateArchiveFolder(destination);
+    if (invalidDestination) return invalidDestination;
+  }
+  for (const rule of parseFolderDestinations(value)) {
+    if (validateExcludedOverlap(rule.destination, settings.excludedPaths)) {
+      return "Destinations overlap protected paths.";
+    }
+  }
+  return undefined;
+}
+
+export function validateStaleDays(value: string): string | undefined {
+  if (!/^\d+$/.test(value.trim()) || Number(value.trim()) < 1) {
+    return "Enter a whole number of days (1 or more).";
   }
   return undefined;
 }
