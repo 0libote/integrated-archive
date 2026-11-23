@@ -2,6 +2,15 @@
 
 All notable changes to Integrated Archive are documented here.
 
+## 0.7.0 — 2026-11-23
+
+### Added
+
+- Optionally archive stale files untouched for a configurable number of days ("Archive stale files" command, plus automatic checks at startup and once a day that always ask first). Off by default and never turned on automatically; limit the scan to specific folders, and protected paths are never archived.
+- Route different folders to different archive locations with per-folder destinations ("Projects => Archive/Projects", longest match wins).
+- Restore an archived file to a folder you pick ("Restore to…"), instead of only its original location.
+- Optional ribbon icon to archive the current file.
+
 ## 0.6.2 — 2026-11-22
 
 ### Changed
