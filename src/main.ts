@@ -1,5 +1,6 @@
 import {
   App,
+  FuzzySuggestModal,
   Modal,
   Notice,
   Plugin,
@@ -26,7 +27,9 @@ import {
   validateDateProperty,
   validateExcludedOverlap,
   validateExcludedPaths,
+  validateFolderDestinations,
   validatePropertySlot,
+  validateStaleDays,
   validateTag,
 } from "./settings";
 
@@ -82,6 +85,9 @@ class ArchiveDeleteModal extends ChoiceModal<DeleteChoice> {
 
 export const BULK_CONFIRM_THRESHOLD = 10;
 
+const STALE_SCAN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const STALE_PREVIEW_COUNT = 10;
+
 export function needsBulkConfirm(count: number, threshold = BULK_CONFIRM_THRESHOLD): boolean {
   return count > threshold;
 }
@@ -106,6 +112,40 @@ class ConfirmBulkModal extends ChoiceModal<boolean> {
     new Setting(this.contentEl)
       .addButton((button) => button.setButtonText("Cancel").onClick(() => this.finish(false)))
       .addButton((button) => button.setButtonText("Continue").setCta().onClick(() => this.finish(true)));
+  }
+}
+
+class FolderPickerModal extends FuzzySuggestModal<string> {
+  private resolve?: (folder: string | null) => void;
+
+  constructor(app: App, private readonly folders: string[]) {
+    super(app);
+  }
+
+  pick(): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.resolve = resolve;
+      this.open();
+    });
+  }
+
+  getItems(): string[] {
+    return this.folders;
+  }
+
+  getItemText(folder: string): string {
+    return folder;
+  }
+
+  onChooseItem(folder: string): void {
+    this.resolve?.(folder);
+    this.resolve = undefined;
+  }
+
+  onClose(): void {
+    super.onClose();
+    this.resolve?.(null);
+    this.resolve = undefined;
   }
 }
 
@@ -220,6 +260,40 @@ export default class IntegratedArchivePlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: "archive-stale-files",
+      name: "Archive stale files",
+      checkCallback: (checking) => {
+        // Enabled state only: scanning every Markdown file on each palette
+        // hover would be wasteful, so availability is a cheap flag check and
+        // the scan itself runs after the user invokes the command.
+        if (!this.settings.staleArchiving) return false;
+        if (!checking) void this.archiveStaleFiles();
+        return true;
+      },
+    });
+
+    if (this.settings.showRibbonIcon) {
+      this.addRibbonIcon("archive", "Archive current file", () => {
+        const file = this.app.workspace.getActiveFile();
+        if (!file || !this.isVaultFile(file) || this.isArchived(file) || this.archiveManager.isExcludedPath(file.path)) {
+          new Notice("No archivable file is active.");
+          return;
+        }
+        void this.archive(file);
+      });
+    }
+
+    if (this.settings.staleArchiving) {
+      // Stale scans always ask before archiving: enabling the toggle only
+      // arms the schedule, and every run ends in a confirmation modal.
+      void this.waitForLayoutReady().then(() => this.archiveStaleFiles());
+      const timer = window.setInterval(() => {
+        void this.archiveStaleFiles();
+      }, STALE_SCAN_INTERVAL_MS);
+      this.register(() => window.clearInterval(timer));
+    }
+
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
       if (!this.settings.showArchiveMenu) return;
       if (file instanceof TFolder) {
@@ -240,6 +314,11 @@ export default class IntegratedArchivePlugin extends Plugin {
           .setIcon("undo-2")
           .setSection("action")
           .onClick(() => void this.restore(file)));
+        menu.addItem((item) => item
+          .setTitle("Restore to…")
+          .setIcon("undo-2")
+          .setSection("action")
+          .onClick(() => void this.restoreTo(file)));
       } else if (!this.archiveManager.isExcludedPath(file.path)) {
         menu.addItem((item) => item
           .setTitle("Archive")
@@ -329,6 +408,69 @@ export default class IntegratedArchivePlugin extends Plugin {
       new Notice(`Could not archive ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
       return false;
     }
+  }
+
+  private async archiveStaleFiles(): Promise<void> {
+    await this.waitForLayoutReady();
+    // The toggle can be switched off while a scheduled run is pending: that
+    // only disarms future scans, and nothing archives without a confirmation.
+    if (!this.settings.staleArchiving) return;
+    const vault = this.app.vault as unknown as { getAllLoadedFiles?: () => TAbstractFile[]; getMarkdownFiles: () => TFile[] };
+    const loaded = typeof vault.getAllLoadedFiles === "function" ? vault.getAllLoadedFiles() : vault.getMarkdownFiles();
+    const active = this.app.workspace.getActiveFile();
+    // Never sweep the note the user is looking at, even when it is stale.
+    const skip = active && this.isVaultFile(active) ? [active.path] : [];
+    const candidates = this.archiveManager.collectStaleFiles(
+      loaded.filter((file): file is TFile => this.isVaultFile(file)),
+      skip,
+    );
+    if (!candidates.length) {
+      new Notice("No stale files to archive.");
+      return;
+    }
+    const noun = candidates.length === 1 ? "file" : "files";
+    const preview = candidates.slice(0, STALE_PREVIEW_COUNT).map((file) => file.path).join("\n");
+    const remainder = candidates.length > STALE_PREVIEW_COUNT ? `\n…and ${candidates.length - STALE_PREVIEW_COUNT} more.` : "";
+    const confirmed = await new ConfirmBulkModal(
+      this.app,
+      `Archive ${candidates.length} stale ${noun}?`,
+      `These files have not been modified in over ${this.settings.staleDays} days:\n${preview}${remainder}\n\nContinue?`,
+    ).choose();
+    if (!confirmed) return;
+    await this.archiveMany(candidates);
+  }
+
+  async restoreTo(file: TFile): Promise<boolean> {
+    if (isExternalFile(file)) {
+      new Notice(`Cannot restore ${file.name}: files outside the vault are not supported.`);
+      return false;
+    }
+    await this.waitForLayoutReady();
+    const folder = await new FolderPickerModal(this.app, this.pickableRestoreFolders()).pick();
+    if (!folder) return false;
+    try {
+      const result = await this.archiveManager.restore(file, { destinationFolder: folder });
+      this.reportRestoreResult(result);
+      return true;
+    } catch (error) {
+      console.error("Integrated Archive restore:", error);
+      new Notice(`Could not restore ${file.name}: ${error instanceof Error ? error.message : String(error)}`);
+      return false;
+    }
+  }
+
+  private pickableRestoreFolders(): string[] {
+    const vault = this.app.vault as unknown as { getAllLoadedFiles?: () => TAbstractFile[] };
+    const loaded = typeof vault.getAllLoadedFiles === "function" ? vault.getAllLoadedFiles() : [];
+    const folders = new Set<string>();
+    for (const entry of loaded) {
+      if (!(entry instanceof TFolder)) continue;
+      if (!entry.path) continue;
+      if (this.archiveManager.isExcludedPath(entry.path)) continue;
+      if (this.archiveManager.isArchivedPath(entry.path)) continue;
+      folders.add(entry.path);
+    }
+    return [...folders].sort();
   }
 
   async restore(file: TFile): Promise<boolean> {
@@ -686,6 +828,11 @@ class ArchiveSettingTab extends PluginSettingTab {
             desc: "Path relative to the vault root.",
             control: { type: "text", key: "archiveFolder", placeholder: "Archive", validate: (value) => validateArchiveFolder(value) ?? validateExcludedOverlap(value, s.excludedPaths) },
           },
+          {
+            name: "Folder destinations",
+            desc: "One Source => Destination rule per line, for example Projects => Archive/Projects. The longest matching source wins; files without a rule use the archive folder above.",
+            control: { type: "textarea", key: "folderDestinations", placeholder: "Projects => Archive/Projects", rows: 4, validate: (value) => validateFolderDestinations(value, s) },
+          },
           { name: "Preserve folder structure", desc: "Keep each file’s original folders inside the archive.", control: { type: "toggle", key: "preserveFolders" } },
           { name: "Clean up empty folders", desc: "Delete folders that become empty after archiving. Never deletes the vault root, the archive folder, or protected paths.", control: { type: "toggle", key: "cleanEmptyFolders" } },
           { name: "Archive linked attachments", desc: "When archiving a Markdown note, also archive images, PDFs, and other files it links to. Linked notes are never included.", control: { type: "toggle", key: "archiveAttachments" } },
@@ -701,10 +848,34 @@ class ArchiveSettingTab extends PluginSettingTab {
             control: { type: "dropdown", key: "deleteAction", options: { ask: "Ask every time", archive: "Archive automatically", delete: "Delete normally" } },
           },
           { name: "Show archive in file menus", desc: "Add Archive directly below Delete in file context menus.", control: { type: "toggle", key: "showArchiveMenu" } },
+          { name: "Show ribbon icon", desc: "Archive the current file from the ribbon. Takes effect after the plugin reloads.", control: { type: "toggle", key: "showRibbonIcon" } },
           {
             name: "Protected paths",
             desc: "One vault-relative path per line. Files and folders here are never archived, and restores into these paths are blocked.",
             control: { type: "textarea", key: "excludedPaths", placeholder: "Private\nTemplates", rows: 4, validate: (value) => validateExcludedPaths(value) ?? validateExcludedOverlap(s.archiveFolder, value) },
+          },
+        ],
+      },
+      {
+        type: "group",
+        heading: "Stale archiving",
+        items: [
+          {
+            name: "Archive stale files",
+            desc: "Look for untouched files at startup and once a day. This only suggests candidates and always asks before archiving anything. Off by default and never turned on automatically. The schedule starts when the plugin loads.",
+            control: { type: "toggle", key: "staleArchiving" },
+          },
+          {
+            name: "Stale after (days)",
+            desc: "Files not modified in this many days count as stale.",
+            visible: () => s.staleArchiving,
+            control: { type: "number", key: "staleDays", min: 1, step: 1, validate: (value) => validateStaleDays(String(value)) },
+          },
+          {
+            name: "Only these folders",
+            desc: "One vault-relative path per line. Empty scans the whole vault. The open file is always skipped, and protected paths are never archived.",
+            visible: () => s.staleArchiving,
+            control: { type: "textarea", key: "staleFolders", placeholder: "Projects", rows: 4, validate: validateExcludedPaths },
           },
         ],
       },

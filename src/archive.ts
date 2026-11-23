@@ -3,6 +3,8 @@ import {
   MAX_ARCHIVE_HISTORY,
   normalizeTag,
   parseExcludedPaths,
+  parseFolderDestinations,
+  parsePathList,
   type ArchiveMetadataSnapshot,
   type ArchivePropertySnapshot,
   type ArchiveRecord,
@@ -82,6 +84,10 @@ export interface ArchiveOptions {
   groupId?: string;
 }
 
+export interface RestoreOptions {
+  destinationFolder?: string;
+}
+
 export interface RestoreResult {
   destination: string;
   historyError?: unknown;
@@ -104,8 +110,7 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   isArchivedPath(path: string): boolean {
-    const folder = this.archiveFolder();
-    return (!!folder && folder !== "." && isPathInFolder(path, folder))
+    return this.archiveRoots().some((root) => isPathInFolder(path, root))
       || this.getHistory().some((record) => record.archivedPath === path);
   }
 
@@ -127,8 +132,8 @@ export class ArchiveManager<File extends ArchiveFile> {
     return this.enqueue(() => this.archiveGroupNow(file));
   }
 
-  restore(file: File): Promise<RestoreResult> {
-    return this.enqueue(() => this.restoreNow(file));
+  restore(file: File, options?: RestoreOptions): Promise<RestoreResult> {
+    return this.enqueue(() => this.restoreNow(file, options?.destinationFolder));
   }
 
   restoreWithGroup(file: File): Promise<RestoreGroupResult> {
@@ -261,9 +266,13 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   private async archiveNow(file: File, groupId?: string): Promise<ArchiveResult> {
-    const archiveFolder = this.archiveFolder();
+    const archiveFolder = this.resolveArchiveFolder(file.path);
     if (!archiveFolder || archiveFolder === ".") throw new Error("Choose an archive folder in settings.");
-    if (isPathInFolder(file.path, archiveFolder)) throw new Error(`${file.name} is already archived.`);
+    // Check every configured destination, not just this file's: a file inside
+    // one archive folder must stay put even when its own source routes elsewhere.
+    if (this.archiveRoots().some((root) => isPathInFolder(file.path, root))) {
+      throw new Error(`${file.name} is already archived.`);
+    }
     if (this.isExcludedPath(file.path)) throw new Error(`${file.name} is in a protected location.`);
     // No history-equality check here on purpose: a live file reusing a stale
     // archived path (e.g. after the archive folder changed) must stay
@@ -377,14 +386,13 @@ export class ArchiveManager<File extends ArchiveFile> {
   private async cleanupEmptyParents(originalPath: string): Promise<string[]> {
     const cleaned: string[] = [];
     if (!this.getSettings().cleanEmptyFolders) return cleaned;
-    const archiveFolder = this.archiveFolder();
+    const roots = this.archiveRoots();
     let current = parentFolder(originalPath);
     while (current) {
-      // Never delete the archive folder itself, anything inside it, or an
-      // ancestor that contains it (such a folder cannot be empty anyway, but
-      // guard explicitly so cleanup can never remove the archive's parent).
-      if (!!archiveFolder && archiveFolder !== "."
-        && (current === archiveFolder || isPathInFolder(current, archiveFolder) || isPathInFolder(archiveFolder, current))) {
+      // Never delete a configured destination or anything that contains one
+      // (such a folder cannot be empty anyway, but guard explicitly so
+      // cleanup can never remove an archive location or its parent).
+      if (roots.some((root) => current === root || isPathInFolder(current, root) || isPathInFolder(root, current))) {
         break;
       }
       // Never delete a protected location, even when it becomes empty.
@@ -407,13 +415,17 @@ export class ArchiveManager<File extends ArchiveFile> {
     return cleaned;
   }
 
-  private async restoreNow(file: File): Promise<RestoreResult> {
+  private async restoreNow(file: File, destinationFolder?: string): Promise<RestoreResult> {
     if (!this.isArchived(file)) throw new Error(`${file.name} is not archived.`);
 
     const history = this.getHistory();
     const recordIndex = this.findHistoryIndex(file.path, history);
     const record = recordIndex >= 0 ? history[recordIndex] : undefined;
-    const { fromStoredPath, inferredProperty, originalPath } = await this.resolveRestorePath(file, record);
+    // A chosen destination overrides history and stored paths: the record is
+    // still used for metadata reversal and then removed as usual.
+    const { fromStoredPath, inferredProperty, originalPath } = destinationFolder === undefined
+      ? await this.resolveRestorePath(file, record)
+      : { originalPath: this.resolveRestoreToPath(file, destinationFolder) };
 
     if (this.isExcludedPath(originalPath)) {
       throw new Error(`Cannot restore ${file.name}: ${originalPath} is in a protected location.`);
@@ -461,6 +473,24 @@ export class ArchiveManager<File extends ArchiveFile> {
     return { originalPath: this.inferOriginalPath(file) };
   }
 
+  private resolveRestoreToPath(file: File, destinationFolder: string): string {
+    const folder = this.host.normalizePath(destinationFolder.trim());
+    if (!folder || folder === ".") throw new Error("Choose a destination folder.");
+    if (destinationFolder.trim().startsWith("/") || destinationFolder.includes("\\")) {
+      throw new Error("Use a folder path relative to the vault root with forward slashes.");
+    }
+    if (folder.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new Error("Use folder names without empty, . or .. path segments.");
+    }
+    if (this.isExcludedPath(folder)) {
+      throw new Error(`Cannot restore ${file.name}: the destination is in a protected location.`);
+    }
+    if (this.archiveRoots().some((root) => folder === root || isPathInFolder(folder, root))) {
+      throw new Error(`Cannot restore ${file.name}: the destination is inside an archive folder.`);
+    }
+    return `${folder}/${file.name}`;
+  }
+
   private async revertMetadata(
     file: File,
     record: ArchiveRecord | undefined,
@@ -496,8 +526,7 @@ export class ArchiveManager<File extends ArchiveFile> {
     const candidate = path.trim();
     if (!candidate || candidate.startsWith("/") || candidate.includes("\\")) return false;
     if (candidate.split("/").some((part) => !part || part === "." || part === "..")) return false;
-    const folder = this.archiveFolder();
-    if (folder && folder !== "." && isPathInFolder(candidate, folder)) return false;
+    if (this.archiveRoots().some((root) => isPathInFolder(candidate, root))) return false;
     // Never restore into a protected location; fall back to inference instead.
     if (this.isExcludedPath(candidate)) return false;
     return true;
@@ -505,21 +534,20 @@ export class ArchiveManager<File extends ArchiveFile> {
 
   private async reconcileRenameNow(oldPath: string, newPath: string): Promise<void> {
     if (!oldPath || oldPath === newPath) return;
-    const folder = this.archiveFolder();
-    const folderConfigured = !!folder && folder !== ".";
-    // Renaming the archive folder itself (or one of its ancestors) moves
+    const roots = this.archiveRoots();
+    // Renaming an archive location itself (or one of its ancestors) moves
     // archived files with it. Keep tracking them at the new location instead
     // of dropping their history; only drop records when an archived item is
-    // moved out of a still-configured archive folder.
-    const archiveMoved = folderConfigured && (oldPath === folder || isPathInFolder(folder, oldPath));
-    const staysArchived = folderConfigured && isPathInFolder(newPath, folder);
+    // moved out of every still-configured archive location.
+    const archiveMoved = roots.some((root) => oldPath === root || isPathInFolder(root, oldPath));
+    const staysArchived = roots.some((root) => isPathInFolder(newPath, root));
     const history = this.getHistory();
     let changed = false;
     const kept: ArchiveRecord[] = [];
     for (const record of history) {
       if (record.archivedPath === oldPath || isPathInFolder(record.archivedPath, oldPath)) {
         changed = true;
-        if (staysArchived || archiveMoved || !folderConfigured) {
+        if (staysArchived || archiveMoved || roots.length === 0) {
           const suffix = record.archivedPath.slice(oldPath.length);
           kept.push({ ...record, archivedPath: `${newPath}${suffix}` });
         }
@@ -532,6 +560,58 @@ export class ArchiveManager<File extends ArchiveFile> {
 
   private archiveFolder(): string {
     return this.host.normalizePath(this.getSettings().archiveFolder.trim());
+  }
+
+  /**
+   * Every folder that can hold archived files: the global folder plus each
+   * per-folder destination. Used anywhere the old code assumed a single
+   * archive folder so custom destinations get the same protections.
+   */
+  private archiveRoots(): string[] {
+    const roots = [this.archiveFolder()];
+    for (const rule of parseFolderDestinations(this.getSettings().folderDestinations)) {
+      roots.push(this.host.normalizePath(rule.destination));
+    }
+    return [...new Set(roots.filter((root) => !!root && root !== "."))];
+  }
+
+  /**
+   * Destination folder for a source path. The longest matching source prefix
+   * wins so nested rules shadow broader ones; without a rule the global
+   * archive folder applies.
+   */
+  resolveArchiveFolder(sourcePath: string): string {
+    const folder = this.archiveFolder();
+    let best: string | null = null;
+    let bestLength = -1;
+    for (const rule of parseFolderDestinations(this.getSettings().folderDestinations)) {
+      if (rule.source.length <= bestLength) continue;
+      if (sourcePath === rule.source || sourcePath.startsWith(`${rule.source}/`)) {
+        best = this.host.normalizePath(rule.destination);
+        bestLength = rule.source.length;
+      }
+    }
+    return best ?? folder;
+  }
+
+  /**
+   * Files eligible for stale archiving, oldest first. Protection, archive
+   * membership, and the whitelist are enforced here; the caller decides how
+   * to confirm before archiving.
+   */
+  collectStaleFiles(files: File[], skipPaths: string[] = []): File[] {
+    const scope = parsePathList(this.getSettings().staleFolders);
+    const skipped = new Set(skipPaths);
+    const cutoff = this.host.now() - Math.max(1, Math.floor(this.getSettings().staleDays)) * STALE_DAY_MS;
+    return files
+      .filter((file) => {
+        if (skipped.has(file.path)) return false;
+        if (this.isArchivedPath(file.path)) return false;
+        if (this.isExcludedPath(file.path)) return false;
+        if (scope.length > 0 && !scope.some((folder) => isPathInFolder(file.path, folder))) return false;
+        return file.stat.mtime <= cutoff;
+      })
+      .sort((left, right) => left.stat.mtime - right.stat.mtime || (left.path < right.path ? -1 : 1));
   }
 
   private async ensureFolder(path: string): Promise<void> {
@@ -716,13 +796,14 @@ export class ArchiveManager<File extends ArchiveFile> {
   }
 
   private inferOriginalPath(file: File): string {
-    const archiveFolder = this.archiveFolder();
-    // Strip the archive prefix whenever the file is inside the archive folder,
-    // regardless of the preserveFolders setting. That setting only controls
-    // where new archives are placed, not where legacy files came from.
-    if (!!archiveFolder && archiveFolder !== "." && isPathInFolder(file.path, archiveFolder)) {
-      const relative = file.path.slice(archiveFolder.length + 1);
-      if (relative) return relative;
+    // Strip whichever archive root the file is inside, regardless of the
+    // preserveFolders setting. That setting only controls where new archives
+    // are placed, not where legacy files came from.
+    for (const root of this.archiveRoots()) {
+      if (isPathInFolder(file.path, root)) {
+        const relative = file.path.slice(root.length + 1);
+        if (relative) return relative;
+      }
     }
     return file.name;
   }
@@ -742,6 +823,7 @@ export class ArchiveManager<File extends ArchiveFile> {
 }
 
 const DEFAULT_DATE_FORMAT = "YYYY-MM-DD";
+const STALE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function cloneValue<T>(value: T): T {
   if (typeof value !== "object" || value === null) return value;

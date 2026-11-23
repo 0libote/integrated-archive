@@ -44,6 +44,7 @@ class MockPlugin {
   app: TestApp;
   cleanups: Cleanup[] = [];
   commands: MockCommand[] = [];
+  ribbonIcons: Array<{ callback: () => void; icon: string; title: string }> = [];
   settingTabs: unknown[] = [];
 
   constructor(app: TestApp) {
@@ -61,6 +62,11 @@ class MockPlugin {
 
   async loadData() {
     return this.app.loadedData;
+  }
+
+  addRibbonIcon(icon: string, title: string, callback: () => void) {
+    this.ribbonIcons.push({ callback, icon, title });
+    return { remove: () => undefined };
   }
 
   register(cleanup: Cleanup) {
@@ -128,9 +134,25 @@ class MockButton {
   setDestructive() { return this; }
 }
 
+class MockFuzzySuggestModal {
+  constructor(public app: TestApp) {}
+  open() {
+    const queue = (this.app as unknown as { fuzzyChoices?: Array<string | undefined> }).fuzzyChoices;
+    const choice = queue?.shift();
+    if (choice === undefined) {
+      (this as unknown as { onClose?: () => void }).onClose?.();
+    } else {
+      (this as unknown as { onChooseItem(item: string): void }).onChooseItem(choice);
+    }
+  }
+  close() {}
+  onClose() {}
+}
+
 mock.module("obsidian", () => ({
   App: class {},
   Modal: MockModal,
+  FuzzySuggestModal: MockFuzzySuggestModal,
   Notice: class {
     constructor(message: string) {
       notices.push(message);

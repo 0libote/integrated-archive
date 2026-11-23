@@ -10,12 +10,15 @@ Integrated Archive moves files out of active work without treating them as dispo
 ## Features
 
 - **Archive current file** command and optional file-menu action.
-- Restore archived files to their original locations, or undo the latest available archive operation.
+- Restore archived files to their original locations, undo the latest available archive operation, or restore a file to a folder you pick ("Restore to…").
 - Optionally archive a note's linked attachments (images, PDFs, and other non-note files) together with it. Attachments linked from other notes stay in place unless shared attachments are included, and restoring the note brings its attachments back.
 - Archive or restore multiple selected files at once, or archive every file in a folder.
 - Choose whether Delete asks each time, archives automatically, or uses Obsidian’s normal delete flow.
 - The optional prompt offers **Archive / Delete / Cancel**. Delete follows your configured Obsidian trash setting and may be permanent.
 - Configurable archive folder with optional original folder structure.
+- Optionally route different folders to different archive locations with per-folder destinations (`Projects => Archive/Projects`, longest match wins).
+- Optionally archive stale files untouched for a configurable number of days, with a scan limited to chosen folders. Checks run at startup and once a day, list every candidate, and always ask before archiving. Off by default and never turned on automatically.
+- Optional ribbon icon to archive the current file.
 - Optionally delete folders that become empty after archiving.
 - Optional archive tag and archived, created, and last-edited frontmatter dates.
 - Optionally write the original path into archived notes so they can be restored even when archive history is lost or synced to another device.
@@ -26,9 +29,9 @@ Integrated Archive moves files out of active work without treating them as dispo
 
 ## Use
 
-Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, delete prompt, tag, property names, folder structure, empty-folder cleanup, and date format under **Settings → Integrated Archive**.
+Right-click a file and select **Archive**, or run **Integrated Archive: Archive current file** from the command palette. Right-click a folder and select **Archive**, or run **Integrated Archive: Archive all files in current folder**, to archive every eligible file inside it. Configure the folder, per-folder destinations (`Projects => Archive/Projects`, one rule per line, longest match wins), delete prompt, tag, property names, folder structure, empty-folder cleanup, and date format under **Settings → Integrated Archive**.
 
-Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation while preserving subsequent edits (for new archive records), and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one operation at a time: archiving N files takes N undos, while a note archived with its attachments restores together.
+Right-click an archived file and select **Restore from archive**, or run **Integrated Archive: Restore current file from archive**. Restores return files to their recorded original paths, reverse metadata added or replaced by that archive operation while preserving subsequent edits (for new archive records), and use collision-safe names if those paths are occupied. **Integrated Archive: Undo last file archive** restores the newest archived file that is still available. Undo works one operation at a time: archiving N files takes N undos, while a note archived with its attachments restores together. **Restore to…** on an archived file moves that file to a folder you pick (attachments archived with it stay archived until restored separately).
 
 Enable **Archive linked attachments** under Archiving settings to move a Markdown note's images, PDFs, and other linked files with it. Linked notes are never included. Attachments already in the archive, in protected paths, or linked from other notes are skipped unless **Include shared attachments** is on. Each attachment gets its own archive record grouped with the note, so restoring or undoing the note restores its attachments too.
 
@@ -37,6 +40,8 @@ Enable **Store original path in notes** under the Restore settings to write each
 Add vault-relative paths under **Protected paths** to keep files or folders out of the archive. Archive actions are hidden for protected files, and batch commands skip them. Restores into protected paths are blocked, and the archive folder itself cannot sit inside a protected path.
 
 Archiving more than 10 files at once asks for confirmation. **Archive all files in current folder** is hidden at the vault root so it cannot archive the whole vault, and folder deletes always use Obsidian's normal delete flow (the archive-on-delete setting applies to files only).
+
+Enable **Archive stale files** under Stale archiving settings to look for files untouched for a chosen number of days. Obsidian checks at startup and once a day; every run lists the candidates and asks before archiving anything, and the open file is always skipped. Limit the scan with **Only these folders**, or leave it empty for the whole vault. Protected paths are never archived, and the toggle stays off until turned on in settings.
 
 Archive history keeps the newest 200 records; older restores are evicted first.
 
